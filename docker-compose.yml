@@ -1,13 +1,14 @@
 services:
-  atlas:
-    image: dcazman/atlas:latest
-    container_name: atlas
+  atlas-v2:
+    image: dcazman/atlas:v2
+    container_name: atlas-v2
     restart: unless-stopped
     ports:
-      - "7784:7784"
+      - "7790:7784"
+    env_file:
+      - /mnt/user/warehouse/atlas-v2/.env
     environment:
-      - ATLAS_TOKEN=${ATLAS_TOKEN}
       - PORT=7784
       - ATLAS_DB_PATH=/app/data/atlas.db
     volumes:
-      - /mnt/user/appdata/atlas:/app/data
+      - /mnt/user/appdata/atlas-v2:/app/data
