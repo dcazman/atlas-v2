@@ -7,7 +7,7 @@ the land" — current state of projects/topics, plus a history log — split int
 It is not a tool for humans. There is no UI. It exists so that any Claude thread can:
 
 - get oriented at the start of a conversation (`get_landscape`)
-- look up one topic in detail (`get_entity`)
+- look up one topic in detail (`get_entity`), or fetch facts directly by id (`get_observation`)
 - record what's true now (`upsert_entity`, `add_observation`, `remove_observation`)
 - record what happened (`log_event`, `get_history`)
 - find something when it doesn't know the exact name (`search`)
@@ -36,9 +36,13 @@ the other section when the user explicitly says so (see project instructions bel
 |---|---|
 | `get_landscape(section)` | All entities + observations, plus any due reminders, for a section. Call at start of chat. |
 | `get_entity(section, name)` | Full detail on one topic: summary, observations, recent events. |
+| `get_observation(section, ids[])` | Fetch 1–20 observations directly by id (obs-number addressing). Scope resolves from each obs's actual section (own + shared); unresolvable ids return in `missing` identically whether deleted, never issued, or out of scope. |
 | `upsert_entity(section, name, summary?)` | Create/update a topic's summary. |
 | `remove_entity(section, name)` | Delete a topic and all its observations. |
 | `add_observation(section, entity, content)` | Add a fact (creates entity if needed). |
+| `update_observation(section, observation_id, content)` | Edit a fact in place — id stays stable, timestamp refreshes. Works on protected rows. |
+| `protect_observation(section, observation_id)` | Mark a fact undeletable (update-only). |
+| `unprotect_observation(section, observation_id)` | Lift protection. |
 | `remove_observation(section, observation_id)` | Delete a stale/wrong fact. |
 | `log_event(section, content, entity?)` | Append to history log. |
 | `get_history(section, limit?, entity?)` | Recent history entries. |

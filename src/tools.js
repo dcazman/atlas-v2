@@ -87,6 +87,7 @@ function registerTools(server, auth) {
     if (args.entity) parts.push(`entity=${args.entity}`);
     if (args.name) parts.push(`name=${args.name}`);
     if (args.observation_id !== undefined) parts.push(`obs=${args.observation_id}`);
+    if (Array.isArray(args.ids)) parts.push(`ids=${args.ids.join(',')}`);
     if (args.reminder_id !== undefined) parts.push(`rem=${args.reminder_id}`);
     if (args.query) parts.push(`q=${args.query}`);
     return parts.join(' ') || null;
@@ -134,6 +135,28 @@ function registerTools(server, auth) {
     const entity = db.getEntity(section, name);
     if (!entity) return text(`No entity named "${name}" in ${section}.`);
     return json(entity);
+  });
+
+  guarded('get_observation', {
+    title: 'Get observation(s) by id',
+    description:
+      'Fetch one or more observations directly by id - the fetch half of obs-number addressing ' +
+      '(handoffs like "Section work, obs 800"). Returns content, entity, section, protected flag, ' +
+      'and updated_at for each id. Scope is resolved from each observation\'s ACTUAL section ' +
+      '(your own section + shared), not from the section argument. Ids that do not resolve come ' +
+      'back in "missing": deleted, never issued, or outside your scope - ids are never recycled, ' +
+      'so a deleted topic may have a headstone in The Ledger (graveyard).',
+    inputSchema: {
+      section: SECTION,
+      ids: z.array(z.number().int()).min(1).max(20).describe('One or more observation ids to fetch (max 20 - this is not a landscape substitute).'),
+    },
+  }, async ({ ids }) => {
+    const { observations, missing } = db.getObservationsByIds(auth.sections, ids);
+    const out = { observations, missing };
+    if (missing.length > 0) {
+      out.note = 'Missing ids were deleted, never issued, or are outside your token scope. Deleted topics may have a headstone in The Ledger (graveyard).';
+    }
+    return json(out);
   });
 
   guarded('upsert_entity', {
@@ -276,7 +299,8 @@ function registerTools(server, auth) {
     title: 'Search',
     description:
       'Search entities, observations, and history events for a keyword. Use when you need ' +
-      'to find something but do not know the exact entity name.',
+      'to find something but do not know the exact entity name. Observation results include ' +
+      'their ids - usable directly with get_observation and obs-number handoffs.',
     inputSchema: {
       section: SECTION,
       query: z.string().describe('Keyword or phrase to search for.'),

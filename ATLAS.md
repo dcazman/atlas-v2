@@ -38,13 +38,17 @@ unrestricted — the gate is conversational. Claude only does this when Dan expl
 says so ("go look at work for X", "write that for work too"). Otherwise each project
 stays in its own section.
 
-## Tools (13 total)
+## Tools (18 total)
 
 | Tool | Purpose |
 |---|---|
 | `get_landscape(section)` | All entities + observations, plus any due reminders, for a section. Shared section is auto-merged in (entities/reminders tagged with origin `section`) — any pull from work or personal sees shared without prompting. Writes stay explicit per-section. Call at start of chat. |
 | `get_time()` | Current date/time (America/New_York) + elapsed time since your token's last Atlas call. Very cheap. Call on any turn involving dates/scheduling/elapsed time when you haven't touched Atlas this turn. Never do date math from memory. |
 | `get_entity(section, name)` | Full detail on one topic: summary, observations, recent events. |
+| `get_observation(section, ids[])` | Fetch 1–20 observations directly by id — the fetch half of obs-number addressing ("Section work, obs 800"). Scope resolves from each obs's ACTUAL section (own + shared), never from the section argument; out-of-scope and nonexistent ids come back identically in `missing` (no scope probing). Ids are AUTOINCREMENT, never recycled — a missing id was deleted or never issued; deleted topics may have a headstone in The Ledger (graveyard). Added 2026-07-20. |
+| `update_observation(section, observation_id, content)` | Edit a fact in place — id stays stable for life (permanent address), timestamp refreshes. Works on protected rows. |
+| `protect_observation(section, observation_id)` | Mark a fact undeletable (update-only). For skill files, standing rules, incident lessons. |
+| `unprotect_observation(section, observation_id)` | Lift protection so a fact can be deleted again. |
 | `upsert_entity(section, name, summary?)` | Create/update a topic's summary. |
 | `remove_entity(section, name)` | Delete a topic and all its observations. |
 | `add_observation(section, entity, content)` | Add a fact (creates entity if needed). |

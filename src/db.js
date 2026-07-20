@@ -238,6 +238,29 @@ function getObservation(section, observationId) {
   ).get(observationId, section);
 }
 
+// Fetch one or more observations directly by ID. Scope comes from the ROW,
+// not the caller: each obs resolves through its entity to its ACTUAL section,
+// which must be in the token's allowed sections. Out-of-scope and nonexistent
+// come back identically in "missing", so a token cannot probe whether IDs
+// exist outside its scope. (Obs IDs are AUTOINCREMENT - never recycled - so a
+// missing id was deleted or never issued; deleted topics may have a headstone
+// in The Ledger.)
+function getObservationsByIds(allowedSections, ids) {
+  const stmt = db.prepare(
+    `SELECT o.id, o.content, o.protected, o.updated_at, ent.name AS entity, ent.section AS section
+     FROM observations o JOIN entities ent ON ent.id = o.entity_id
+     WHERE o.id = ?`
+  );
+  const observations = [];
+  const missing = [];
+  for (const id of ids) {
+    const row = stmt.get(id);
+    if (row && allowedSections.includes(row.section)) observations.push(row);
+    else missing.push(id);
+  }
+  return { observations, missing };
+}
+
 function updateObservation(section, observationId, content) {
   const obs = getObservation(section, observationId);
   if (!obs) return { ok: false, reason: 'not_found' };
@@ -390,6 +413,7 @@ module.exports = {
   removeEntity,
   addObservation,
   getObservation,
+  getObservationsByIds,
   updateObservation,
   setObservationProtected,
   removeObservation,
