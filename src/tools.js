@@ -13,6 +13,18 @@ function text(str) {
   return { content: [{ type: 'text', text: str }] };
 }
 
+// board_rows helpers (v3). age is a RENDER rule, never a stored column: it is
+// computed here from the trigger-owned timestamps. related is stored as a JSON
+// string; hand callers the parsed array.
+function ageDays(ts) {
+  if (!ts) return null;
+  const t = new Date(ts.replace(' ', 'T') + 'Z');
+  return Math.floor((Date.now() - t.getTime()) / 86400000);
+}
+function safeParse(s) {
+  try { return JSON.parse(s); } catch { return s; }
+}
+
 function denied(auth, section) {
   return {
     isError: true,
@@ -366,6 +378,94 @@ function registerTools(server, auth) {
   }, async ({ section, reminder_id }) => {
     const ok = db.removeReminder(section, reminder_id);
     return text(ok ? `Removed reminder ${reminder_id}.` : `No reminder ${reminder_id} found in ${section}.`);
+  });
+
+  // -------------------------------------------------------------------------
+  // v3 STRUCTURED BOARD (PCT-15801 Phase 2). Typed rows on the board_rows
+  // table. All fences live in the DB (CHECK/NOT NULL/FK/triggers); these tools
+  // are just the guarded single-writer path to them. Timestamps and age are
+  // owned by the DB + render, never by the model (governing rule, shared obs
+  // 873). No delete tool yet: deletion and its closure-refuse fence land
+  // together in item 3, so the destructive path never ships without its fence.
+  // -------------------------------------------------------------------------
+  const BOARD_STATUS = z.enum(['active', 'waiting', 'blocked', 'done']);
+
+  function decorate(row) {
+    return {
+      ...row,
+      related: safeParse(row.related),
+      age_days: ageDays(row.status_changed_at),   // stuck-ness: time in current status
+      lifespan_days: ageDays(row.created_at),      // total age since created
+    };
+  }
+
+  guarded('board_add', {
+    title: 'Add board row',
+    description:
+      'Add a typed row to the v3 structured work board. Returns the immutable row number. ' +
+      'Status defaults to "active". Use related for linked Jira keys. Nothing auto-promotes onto ' +
+      'the board - a row exists because a human decision put it here.',
+    inputSchema: {
+      section: SECTION,
+      title: z.string().describe('Short row headline.'),
+      status: BOARD_STATUS.optional().describe('Defaults to "active".'),
+      related: z.array(z.string()).optional().describe('Linked Jira keys, e.g. ["PCT-15801"].'),
+      waiting_on: z.string().optional().describe('Who or what the row is blocked on (for waiting/blocked rows).'),
+    },
+  }, async ({ section, title, status, related, waiting_on }) => {
+    return json(db.addBoardRow(section, title, { status, related, waiting_on }));
+  });
+
+  guarded('board_list', {
+    title: 'List board rows',
+    description:
+      'List structured board rows for a section, lowest row number first. Hides done rows by ' +
+      'default (the live board); pass include_done for everything. age_days = time in the current ' +
+      'status (stuck-ness); lifespan_days = time since the row was created.',
+    inputSchema: {
+      section: SECTION,
+      include_done: z.boolean().optional().describe('Include done rows too (default false).'),
+    },
+  }, async ({ section, include_done }) => {
+    return json(db.listBoardRows(section, include_done).map(decorate));
+  });
+
+  guarded('board_get', {
+    title: 'Get board row',
+    description: 'Get one board row by its immutable row number.',
+    inputSchema: {
+      section: SECTION,
+      row_id: z.number().int().describe('The immutable row number.'),
+    },
+  }, async ({ section, row_id }) => {
+    const row = db.getBoardRow(section, row_id);
+    if (!row) return text(`No board row ${row_id} in ${section}.`);
+    return json(decorate(row));
+  });
+
+  guarded('board_update', {
+    title: 'Update board row',
+    description:
+      'Update a board row by its number - any subset of title / status / related / waiting_on. ' +
+      'Timestamps are the database\'s job: updated_at bumps on every change, status_changed_at moves ' +
+      'only when status actually changes. Status is CHECK-enforced (active/waiting/blocked/done).',
+    inputSchema: {
+      section: SECTION,
+      row_id: z.number().int().describe('The immutable row number to update.'),
+      title: z.string().optional(),
+      status: BOARD_STATUS.optional(),
+      related: z.array(z.string()).optional().describe('Replaces the related list.'),
+      waiting_on: z.string().optional(),
+    },
+  }, async ({ section, row_id, title, status, related, waiting_on }) => {
+    const fields = {};
+    if (title !== undefined) fields.title = title;
+    if (status !== undefined) fields.status = status;
+    if (related !== undefined) fields.related = related;
+    if (waiting_on !== undefined) fields.waiting_on = waiting_on;
+    const r = db.updateBoardRow(section, row_id, fields);
+    if (!r.ok) return text(`No board row ${row_id} in ${section}.`);
+    return json(r);
   });
 }
 
