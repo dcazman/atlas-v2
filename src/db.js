@@ -135,7 +135,48 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_reminders_section ON reminders(section);
   CREATE INDEX IF NOT EXISTS idx_reminders_trigger ON reminders(trigger_date);
   CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+
+  -- v3: structured board rows (PCT-15801 Phase 2). Typed, rule-enforcing rows
+  -- that replace the prose board. Every rule here is a DB fence, not a
+  -- convention: CHECK (status / section / related-is-JSON), NOT NULL (title),
+  -- FK (closure_ref -> events), and triggers own the timestamps. Schema of
+  -- record: Atlas work obs 872. Governing rule: shared obs 873.
+  CREATE TABLE IF NOT EXISTS board_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','waiting','blocked','done')),
+    related TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(related)),
+    waiting_on TEXT,
+    closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    status_changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_board_rows_section ON board_rows(section);
+  CREATE INDEX IF NOT EXISTS idx_board_rows_status  ON board_rows(status);
+
+  -- updated_at bumps on EVERY write (info-freshness clock). recursive_triggers
+  -- is OFF (SQLite default), so this trigger's own UPDATE does not re-fire.
+  CREATE TRIGGER IF NOT EXISTS board_rows_touch
+    AFTER UPDATE ON board_rows FOR EACH ROW
+    BEGIN UPDATE board_rows SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+  -- status_changed_at moves ONLY on a real status transition (stuck-ness clock).
+  -- The engine stamps it, not the write path and not the model. Un-forgettable.
+  CREATE TRIGGER IF NOT EXISTS board_rows_status_stamp
+    AFTER UPDATE OF status ON board_rows FOR EACH ROW
+    WHEN OLD.status <> NEW.status
+    BEGIN UPDATE board_rows SET status_changed_at = datetime('now') WHERE id = NEW.id; END;
 `);
+
+// v3 schema marker (PCT-15801). board_rows itself is additive and created above
+// via CREATE ... IF NOT EXISTS, so this bump is bookkeeping: it records that the
+// DB is at v3 and lets a future migration guard on user_version the way v2 did.
+if (db.prepare('PRAGMA user_version').get().user_version < 3) {
+  db.exec('PRAGMA user_version = 3');
+}
 
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
@@ -406,6 +447,48 @@ function setGroomMeta(key, value) {
   db.prepare('INSERT INTO groom_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
 }
 
+// ---------------------------------------------------------------------------
+// board_rows (v3 structured board, PCT-15801 Phase 2). These helpers NEVER
+// write updated_at / status_changed_at - those clocks are owned by the
+// triggers above, by design (governing rule, shared obs 873).
+// ---------------------------------------------------------------------------
+function addBoardRow(section, title, opts = {}) {
+  const related = opts.related === undefined
+    ? '[]'
+    : (typeof opts.related === 'string' ? opts.related : JSON.stringify(opts.related));
+  const info = db.prepare(
+    `INSERT INTO board_rows (section, title, status, related, waiting_on)
+     VALUES (?, ?, COALESCE(?, 'active'), ?, ?)`
+  ).run(section, title, opts.status ?? null, related, opts.waiting_on ?? null);
+  return { row_id: info.lastInsertRowid };
+}
+
+function listBoardRows(section, includeDone) {
+  const sql = includeDone
+    ? 'SELECT * FROM board_rows WHERE section = ? ORDER BY id'
+    : "SELECT * FROM board_rows WHERE section = ? AND status != 'done' ORDER BY id";
+  return db.prepare(sql).all(section);
+}
+
+function getBoardRow(section, id) {
+  return db.prepare('SELECT * FROM board_rows WHERE id = ? AND section = ?').get(id, section);
+}
+
+function updateBoardRow(section, id, fields = {}) {
+  const row = getBoardRow(section, id);
+  if (!row) return { ok: false, reason: 'not_found' };
+  const sets = [], vals = [];
+  if (fields.title !== undefined)       { sets.push('title = ?');       vals.push(fields.title); }
+  if (fields.status !== undefined)      { sets.push('status = ?');      vals.push(fields.status); }
+  if (fields.waiting_on !== undefined)  { sets.push('waiting_on = ?');  vals.push(fields.waiting_on); }
+  if (fields.related !== undefined)     { sets.push('related = ?');     vals.push(typeof fields.related === 'string' ? fields.related : JSON.stringify(fields.related)); }
+  if (fields.closure_ref !== undefined) { sets.push('closure_ref = ?'); vals.push(fields.closure_ref); }
+  if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
+  vals.push(id, section);
+  db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
+  return { ok: true, row_id: id };
+}
+
 module.exports = {
   getLandscape,
   getEntity,
@@ -429,4 +512,8 @@ module.exports = {
   lastCallTime,
   getGroomMeta,
   setGroomMeta,
+  addBoardRow,
+  listBoardRows,
+  getBoardRow,
+  updateBoardRow,
 };
