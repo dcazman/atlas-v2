@@ -127,3 +127,100 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 app.listen(PORT, () => console.log('atlas-mcp v2 running on port ' + PORT));
+
+// ---------------------------------------------------------------------------
+// READ-ONLY BOARD VIEW (PCT-15801 Phase 2, item 4). A plain HTTP page on its
+// own LAN port so Dan can SEE the position without a Claude session. Renders
+// straight off the tables (VIEW vs STORE, Atlas obs 875): live pieces + the
+// untriaged tray only, oldest-first. No writes here - single-writer stays the
+// MCP API. LAN-only (not on the Cloudflare tunnel), so no auth gate.
+// ---------------------------------------------------------------------------
+const BOARD_PORT = process.env.BOARD_PORT || 7795;
+const BOARD_SECTION = process.env.BOARD_SECTION || 'work';
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+function boardDaysSince(ts) {
+  if (!ts) return '';
+  const t = new Date(ts.replace(' ', 'T') + 'Z');
+  return Math.floor((Date.now() - t.getTime()) / 86400000) + 'd';
+}
+function boardStamp() {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short',
+  }).format(new Date());
+}
+function renderBoard() {
+  let pieces = [], pending = [];
+  try { pieces = dbMod.listBoardRows(BOARD_SECTION, false); } catch (e) { /* render empty on error */ }
+  try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
+  const badge = (s) => `<span class="b b-${esc(s)}">${esc(s)}</span>`;
+  const pieceRows = pieces.map((p) => {
+    let rel = [];
+    try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
+    return `<tr><td class="id">${p.id}</td><td>${esc(p.title)}</td><td>${badge(p.status)}</td>`
+      + `<td class="tk">${rel.map((r) => esc(r)).join(' ')}</td>`
+      + `<td>${esc(p.waiting_on || '')}</td><td class="age">${boardDaysSince(p.status_changed_at)}</td></tr>`;
+  }).join('');
+  const pendRows = pending.map((p) =>
+    `<tr><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.created_at)}</td></tr>`
+  ).join('');
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>Dan · Board</title>
+<style>
+  body{font:15px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
+  header{padding:14px 18px;border-bottom:1px solid #2a2f3a;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;font-weight:600}
+  .meta{color:#8b94a3;font-size:12px}
+  .tabs{display:flex;gap:6px;padding:12px 18px 0}
+  .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
+  .tabs button.on{background:#232a36;color:#fff}
+  .panel{display:none;padding:0 18px 24px}
+  .panel.on{display:block}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #222833;vertical-align:top}
+  th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
+  td.age{color:#8b94a3;font-variant-numeric:tabular-nums;width:52px}
+  td.tk{color:#7aa2f7;font-family:ui-monospace,monospace;font-size:12px}
+  td.src{color:#8b94a3;font-size:12px}
+  .b{font-size:11px;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
+  .b-active{background:#14532d;color:#86efac}
+  .b-waiting{background:#4a3a12;color:#fde68a}
+  .b-blocked{background:#4c1d24;color:#fca5a5}
+  .b-done{background:#26303f;color:#93a3b8}
+  .empty{color:#8b94a3;padding:24px 0}
+  footer{color:#5b6472;font-size:11px;padding:0 18px 22px}
+</style></head><body>
+<header>
+  <h1>Dan · Board</h1>
+  <span class="meta">as of ${esc(boardStamp())}</span>
+  <span class="meta">${pieces.length} live pieces &middot; ${pending.length} pending</span>
+</header>
+<div class="tabs">
+  <button id="tb" class="on" onclick="show('board')">Jira Board (${pieces.length})</button>
+  <button id="tp" onclick="show('pending')">Pending (${pending.length})</button>
+</div>
+<div id="board" class="panel on">
+  ${pieces.length ? `<table><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Tickets</th><th>Waiting on</th><th>Age</th></tr></thead><tbody>${pieceRows}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+</div>
+<div id="pending" class="panel">
+  ${pending.length ? `<table><thead><tr><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
+</div>
+<footer>Read-only. Oldest first. Live pieces + untriaged pending only &mdash; the store keeps everything else. Auto-refreshes every 30s.</footer>
+<script>
+function show(w){for(const [id,name] of [['board','tb'],['pending','tp']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}}
+</script>
+</body></html>`;
+}
+
+const boardApp = express();
+boardApp.get('/', (req, res) => { res.set('Content-Type', 'text/html; charset=utf-8'); res.send(renderBoard()); });
+boardApp.get('/health', (req, res) => res.json({ ok: true, service: 'atlas-board', section: BOARD_SECTION, port: BOARD_PORT }));
+boardApp.listen(BOARD_PORT, () => console.log('board view (read-only) on port ' + BOARD_PORT + ' section=' + BOARD_SECTION));

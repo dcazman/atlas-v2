@@ -5,10 +5,12 @@ services:
     restart: unless-stopped
     ports:
       - "7790:7784"
+      - "7795:7795"
     env_file:
       - /mnt/user/warehouse/atlas-v2/.env
     environment:
       - PORT=7784
+      - BOARD_PORT=7795
       - ATLAS_DB_PATH=/app/data/atlas.db
     volumes:
       - /mnt/user/appdata/atlas-v2:/app/data
