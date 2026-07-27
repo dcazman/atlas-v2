@@ -80,6 +80,48 @@ if (userVersion < 2 && hasEntities) {
   console.log('atlas v2 migration complete (user_version 2)');
 }
 
+// ---------------------------------------------------------------------------
+// v4 MIGRATION (PCT-15801, hard-require-ticket). board_rows gains a CHECK that
+// `related` is a non-empty JSON array: a board piece must carry >=1 ticket
+// number ("on the board => it has a ticket", Dan Jul 27). SQLite cannot
+// ALTER-ADD a CHECK, so rebuild the table. Rows are copied as-is (prod
+// board_rows is empty; a non-conforming row would fail the copy loudly rather
+// than be silently dropped). Triggers/indexes are re-established by the
+// CREATE ... IF NOT EXISTS block below. pending_items is additive (created
+// below). Runs BEFORE that block so the rebuilt table wins.
+// ---------------------------------------------------------------------------
+const hasBoardRows = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='board_rows'").get();
+if (userVersion < 4 && hasBoardRows) {
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec('BEGIN;');
+  db.exec(`
+    CREATE TABLE board_rows_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','waiting','blocked','done')),
+      related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
+      waiting_on TEXT,
+      closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      status_changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO board_rows_new (id, section, title, status, related, waiting_on, closure_ref, created_at, updated_at, status_changed_at)
+      SELECT id, section, title, status, related, waiting_on, closure_ref, created_at, updated_at, status_changed_at FROM board_rows;
+    DROP TABLE board_rows;
+    ALTER TABLE board_rows_new RENAME TO board_rows;
+  `);
+  db.exec('COMMIT;');
+  db.exec('PRAGMA foreign_keys = ON;');
+  const fkErrors = db.prepare('PRAGMA foreign_key_check').all();
+  if (fkErrors.length > 0) {
+    console.error('FATAL: foreign_key_check failed after v4 migration:', JSON.stringify(fkErrors));
+    process.exit(1);
+  }
+  console.log('atlas v4 migration complete (board_rows require-ticket)');
+}
+
 db.exec(`
   PRAGMA foreign_keys = ON;
 
@@ -146,7 +188,7 @@ db.exec(`
     section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','waiting','blocked','done')),
-    related TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(related)),
+    related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
     waiting_on TEXT,
     closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -169,13 +211,39 @@ db.exec(`
     AFTER UPDATE OF status ON board_rows FOR EACH ROW
     WHEN OLD.status <> NEW.status
     BEGIN UPDATE board_rows SET status_changed_at = datetime('now') WHERE id = NEW.id; END;
+
+  -- v4: PENDING TRAY (PCT-15801 Phase 2, item 2). Candidates with no ticket yet.
+  -- Own immutable ids (never reused). A pending item's fate is merge / promote /
+  -- dismiss - each leaves a trace (nothing silently vanishes). state != 'pending'
+  -- means resolved: DISMISSED FROM VIEW but retained in store (VIEW vs STORE,
+  -- obs 875). merged_into links to the piece that absorbed it = its provenance.
+  CREATE TABLE IF NOT EXISTS pending_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+    source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('slack','jira','email','calendar','manual')),
+    source_ref TEXT,
+    summary TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','merged','promoted','dismissed')),
+    merged_into INTEGER REFERENCES board_rows(id) ON DELETE SET NULL,
+    resolution_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pending_section_state ON pending_items(section, state);
+
+  -- resolved_at is stamped by the engine the moment an item leaves 'pending'.
+  CREATE TRIGGER IF NOT EXISTS pending_items_resolve
+    AFTER UPDATE OF state ON pending_items FOR EACH ROW
+    WHEN OLD.state = 'pending' AND NEW.state <> 'pending'
+    BEGIN UPDATE pending_items SET resolved_at = datetime('now') WHERE id = NEW.id; END;
 `);
 
-// v3 schema marker (PCT-15801). board_rows itself is additive and created above
-// via CREATE ... IF NOT EXISTS, so this bump is bookkeeping: it records that the
-// DB is at v3 and lets a future migration guard on user_version the way v2 did.
-if (db.prepare('PRAGMA user_version').get().user_version < 3) {
-  db.exec('PRAGMA user_version = 3');
+// schema version marker. board_rows + pending_items are created above via
+// CREATE ... IF NOT EXISTS, and the v4 block above rebuilt board_rows to add the
+// require-ticket CHECK. This bump records the DB is at v4 for future migrations.
+if (db.prepare('PRAGMA user_version').get().user_version < 4) {
+  db.exec('PRAGMA user_version = 4');
 }
 
 function findEntity(section, name) {
@@ -453,20 +521,26 @@ function setGroomMeta(key, value) {
 // triggers above, by design (governing rule, shared obs 873).
 // ---------------------------------------------------------------------------
 function addBoardRow(section, title, opts = {}) {
-  const related = opts.related === undefined
-    ? '[]'
-    : (typeof opts.related === 'string' ? opts.related : JSON.stringify(opts.related));
+  // require-ticket (v4): a board piece must carry >=1 ticket number. The DB
+  // CHECK is the real fence; this is the friendly guard with a clear message.
+  const arr = Array.isArray(opts.related)
+    ? opts.related
+    : (typeof opts.related === 'string' ? JSON.parse(opts.related) : []);
+  if (!Array.isArray(arr) || arr.length === 0) {
+    throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
+  }
   const info = db.prepare(
     `INSERT INTO board_rows (section, title, status, related, waiting_on)
      VALUES (?, ?, COALESCE(?, 'active'), ?, ?)`
-  ).run(section, title, opts.status ?? null, related, opts.waiting_on ?? null);
+  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null);
   return { row_id: info.lastInsertRowid };
 }
 
 function listBoardRows(section, includeDone) {
+  // oldest-first, top->down (Dan Jul 27). The order is the query, not memory.
   const sql = includeDone
-    ? 'SELECT * FROM board_rows WHERE section = ? ORDER BY id'
-    : "SELECT * FROM board_rows WHERE section = ? AND status != 'done' ORDER BY id";
+    ? 'SELECT * FROM board_rows WHERE section = ? ORDER BY created_at ASC, id ASC'
+    : "SELECT * FROM board_rows WHERE section = ? AND status != 'done' ORDER BY created_at ASC, id ASC";
   return db.prepare(sql).all(section);
 }
 
@@ -487,6 +561,39 @@ function updateBoardRow(section, id, fields = {}) {
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
   return { ok: true, row_id: id };
+}
+
+// ---------------------------------------------------------------------------
+// pending_items (v4 tray). Primitives only; the merge/promote/dismiss flows are
+// composed in tools.js so each leaves an events trace. resolved_at is owned by
+// the pending_items_resolve trigger, never written here.
+// ---------------------------------------------------------------------------
+function addPendingItem(section, summary, opts = {}) {
+  const info = db.prepare(
+    `INSERT INTO pending_items (section, summary, source, source_ref)
+     VALUES (?, ?, COALESCE(?, 'manual'), ?)`
+  ).run(section, summary, opts.source ?? null, opts.source_ref ?? null);
+  return { pending_id: info.lastInsertRowid };
+}
+
+function listPending(section) {
+  // untriaged only, oldest-first (VIEW vs STORE obs 875: resolved items are hidden).
+  return db.prepare(
+    "SELECT * FROM pending_items WHERE section = ? AND state = 'pending' ORDER BY created_at ASC, id ASC"
+  ).all(section);
+}
+
+function getPending(section, id) {
+  return db.prepare('SELECT * FROM pending_items WHERE id = ? AND section = ?').get(id, section);
+}
+
+function resolvePending(section, id, newState, opts = {}) {
+  const p = getPending(section, id);
+  if (!p) return { ok: false, reason: 'not_found' };
+  if (p.state !== 'pending') return { ok: false, reason: 'already_resolved', state: p.state };
+  db.prepare('UPDATE pending_items SET state = ?, merged_into = ?, resolution_note = ? WHERE id = ?')
+    .run(newState, opts.merged_into ?? null, opts.resolution_note ?? null, id);
+  return { ok: true, pending_id: id, state: newState };
 }
 
 module.exports = {
@@ -516,4 +623,8 @@ module.exports = {
   listBoardRows,
   getBoardRow,
   updateBoardRow,
+  addPendingItem,
+  listPending,
+  getPending,
+  resolvePending,
 };

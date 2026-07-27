@@ -409,7 +409,7 @@ function registerTools(server, auth) {
       section: SECTION,
       title: z.string().describe('Short row headline.'),
       status: BOARD_STATUS.optional().describe('Defaults to "active".'),
-      related: z.array(z.string()).optional().describe('Linked Jira keys, e.g. ["PCT-15801"].'),
+      related: z.array(z.string()).min(1).describe('Required - one or more ticket numbers, e.g. ["PCT-15801"]. A board piece must carry a ticket ("on the board => it has a ticket").'),
       waiting_on: z.string().optional().describe('Who or what the row is blocked on (for waiting/blocked rows).'),
     },
   }, async ({ section, title, status, related, waiting_on }) => {
@@ -466,6 +466,106 @@ function registerTools(server, auth) {
     const r = db.updateBoardRow(section, row_id, fields);
     if (!r.ok) return text(`No board row ${row_id} in ${section}.`);
     return json(r);
+  });
+
+  // -------------------------------------------------------------------------
+  // PENDING TRAY (PCT-15801 Phase 2, item 2). Candidates with no ticket yet.
+  // Three fates, each leaving an events trace: merge into a piece / promote to a
+  // new piece (needs a ticket) / dismiss (logged). Merge & promote are propose-
+  // then-confirm (obs 874 #8): the tool runs only when Dan says go. Resolved
+  // items drop out of pending_list by design (VIEW vs STORE, obs 875).
+  // -------------------------------------------------------------------------
+  function decoratePending(p) {
+    return { ...p, age_days: ageDays(p.created_at) };
+  }
+
+  guarded('pending_add', {
+    title: 'Add pending item',
+    description:
+      'Add an untriaged candidate to the pending tray (no ticket yet). Use for a Slack line / email / raw ' +
+      'signal that might be real work. It sits in the tray, oldest first, until a human decision merges it ' +
+      'into a piece, promotes it to a new piece, or dismisses it.',
+    inputSchema: {
+      section: SECTION,
+      summary: z.string().describe('One line: what this is.'),
+      source: z.enum(['slack', 'jira', 'email', 'calendar', 'manual']).optional().describe('Where it came from (default manual).'),
+      source_ref: z.string().optional().describe('Origin id: slack ts+channel, jira key, etc.'),
+    },
+  }, async ({ section, summary, source, source_ref }) => {
+    return json(db.addPendingItem(section, summary, { source, source_ref }));
+  });
+
+  guarded('pending_list', {
+    title: 'List pending tray',
+    description:
+      'List untriaged pending items for a section, oldest first. Resolved items (merged / promoted / ' +
+      'dismissed) are hidden by design - they are retained in the store, just not shown.',
+    inputSchema: { section: SECTION },
+  }, async ({ section }) => {
+    return json(db.listPending(section).map(decoratePending));
+  });
+
+  guarded('pending_merge', {
+    title: 'Merge pending item into a piece',
+    description:
+      'Fold a pending item into an EXISTING board piece (it was more info about a ticket you already have). ' +
+      'The item leaves the tray but is retained, linked to the piece as provenance. Propose to Dan; run only on his confirm.',
+    inputSchema: {
+      section: SECTION,
+      pending_id: z.number().int(),
+      into_row_id: z.number().int().describe('The board piece to merge into.'),
+    },
+  }, async ({ section, pending_id, into_row_id }) => {
+    const piece = db.getBoardRow(section, into_row_id);
+    if (!piece) return text(`No board piece ${into_row_id} in ${section}.`);
+    const p = db.getPending(section, pending_id);
+    if (!p) return text(`No pending item ${pending_id} in ${section}.`);
+    const r = db.resolvePending(section, pending_id, 'merged', { merged_into: into_row_id });
+    if (!r.ok) return text(`Pending ${pending_id}: ${r.reason}${r.state ? ' (' + r.state + ')' : ''}.`);
+    db.logEvent(section, `Board: merged pending #${pending_id} (${p.source}${p.source_ref ? ' ' + p.source_ref : ''}) into piece #${into_row_id} ${piece.related} - ${p.summary}`);
+    return json({ ok: true, merged: pending_id, into: into_row_id });
+  });
+
+  guarded('pending_promote', {
+    title: 'Promote pending item to a new piece',
+    description:
+      'Turn a pending item into a NEW board piece. Requires at least one ticket number ("on the board => it ' +
+      'has a ticket"). The pending item is retained, linked to the new piece. Propose to Dan; run only on his confirm.',
+    inputSchema: {
+      section: SECTION,
+      pending_id: z.number().int(),
+      title: z.string().describe('The new piece headline.'),
+      related: z.array(z.string()).min(1).describe('One or more ticket numbers - required.'),
+      status: BOARD_STATUS.optional(),
+      waiting_on: z.string().optional(),
+    },
+  }, async ({ section, pending_id, title, related, status, waiting_on }) => {
+    const p = db.getPending(section, pending_id);
+    if (!p) return text(`No pending item ${pending_id} in ${section}.`);
+    if (p.state !== 'pending') return text(`Pending ${pending_id} already ${p.state}.`);
+    const { row_id } = db.addBoardRow(section, title, { related, status, waiting_on });
+    db.resolvePending(section, pending_id, 'promoted', { merged_into: row_id });
+    db.logEvent(section, `Board: promoted pending #${pending_id} (${p.source}${p.source_ref ? ' ' + p.source_ref : ''}) to new piece #${row_id} ${JSON.stringify(related)} - ${title}`);
+    return json({ ok: true, promoted: pending_id, new_piece: row_id });
+  });
+
+  guarded('pending_dismiss', {
+    title: 'Dismiss pending item',
+    description:
+      'Drop a pending item as not real work. It leaves the tray but is retained with the reason - logged, ' +
+      'never silently deleted (a silent drop is just a new way to lose a pawn).',
+    inputSchema: {
+      section: SECTION,
+      pending_id: z.number().int(),
+      reason: z.string().describe('Why it is not real work.'),
+    },
+  }, async ({ section, pending_id, reason }) => {
+    const p = db.getPending(section, pending_id);
+    if (!p) return text(`No pending item ${pending_id} in ${section}.`);
+    if (p.state !== 'pending') return text(`Pending ${pending_id} already ${p.state}.`);
+    db.resolvePending(section, pending_id, 'dismissed', { resolution_note: reason });
+    db.logEvent(section, `Board: dismissed pending #${pending_id} (${p.source}${p.source_ref ? ' ' + p.source_ref : ''}) - ${reason}`);
+    return json({ ok: true, dismissed: pending_id });
   });
 }
 
