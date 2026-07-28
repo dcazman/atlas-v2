@@ -191,6 +191,7 @@ db.exec(`
     related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
     waiting_on TEXT,
     source_date TEXT,
+    priority INTEGER,
     closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -277,6 +278,13 @@ if (db.prepare('PRAGMA user_version').get().user_version < 5) {
 if (db.prepare('PRAGMA user_version').get().user_version < 6) {
   try { db.exec('ALTER TABLE board_rows ADD COLUMN source_date TEXT'); } catch (e) { /* already present */ }
   db.exec('PRAGMA user_version = 6');
+}
+
+// v7: board_rows.priority — Dan's manual override. Default order is oldest-first;
+// a bumped piece (lower priority number) floats to the top; NULL = unbumped.
+if (db.prepare('PRAGMA user_version').get().user_version < 7) {
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN priority INTEGER'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 7');
 }
 
 function findEntity(section, name) {
@@ -571,9 +579,12 @@ function addBoardRow(section, title, opts = {}) {
 
 function listBoardRows(section, includeDone) {
   // oldest-first, top->down (Dan Jul 27). The order is the query, not memory.
+  // bumped pieces (priority set, lowest first) float to the top; the rest are
+  // oldest-first by true ticket age (source_date), else created_at.
+  const ORDER = 'ORDER BY (priority IS NULL), priority ASC, COALESCE(source_date, created_at) ASC, id ASC';
   const sql = includeDone
-    ? 'SELECT * FROM board_rows WHERE section = ? ORDER BY created_at ASC, id ASC'
-    : "SELECT * FROM board_rows WHERE section = ? AND status != 'done' ORDER BY created_at ASC, id ASC";
+    ? `SELECT * FROM board_rows WHERE section = ? ${ORDER}`
+    : `SELECT * FROM board_rows WHERE section = ? AND status != 'done' ${ORDER}`;
   return db.prepare(sql).all(section);
 }
 
@@ -591,10 +602,22 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.related !== undefined)     { sets.push('related = ?');     vals.push(typeof fields.related === 'string' ? fields.related : JSON.stringify(fields.related)); }
   if (fields.closure_ref !== undefined) { sets.push('closure_ref = ?'); vals.push(fields.closure_ref); }
   if (fields.source_date !== undefined) { sets.push('source_date = ?'); vals.push(fields.source_date); }
+  if (fields.priority !== undefined) { sets.push('priority = ?'); vals.push(fields.priority); }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
   return { ok: true, row_id: id };
+}
+
+// Bump a piece to the top of the board (Dan's "work on N" override), or clear
+// the bump back to default oldest-first. New bumps sit above older bumps.
+function bumpBoardRow(section, id, clear = false) {
+  const row = getBoardRow(section, id);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (clear) return updateBoardRow(section, id, { priority: null });
+  const m = db.prepare('SELECT MIN(priority) AS mn FROM board_rows WHERE section = ? AND priority IS NOT NULL').get(section);
+  const next = (m && m.mn !== null && m.mn !== undefined) ? m.mn - 1 : 0;
+  return updateBoardRow(section, id, { priority: next });
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +653,14 @@ function resolvePending(section, id, newState, opts = {}) {
   return { ok: true, pending_id: id, state: newState };
 }
 
+// Recover a resolved (merged/promoted/dismissed) tray item back to pending.
+function reopenPending(section, id) {
+  const p = getPending(section, id);
+  if (!p) return { ok: false, reason: 'not_found' };
+  db.prepare("UPDATE pending_items SET state = 'pending', resolution_note = NULL, resolved_at = NULL, merged_into = NULL WHERE id = ?").run(id);
+  return { ok: true, pending_id: id, state: 'pending' };
+}
+
 module.exports = {
   getLandscape,
   getEntity,
@@ -657,8 +688,10 @@ module.exports = {
   listBoardRows,
   getBoardRow,
   updateBoardRow,
+  bumpBoardRow,
   addPendingItem,
   listPending,
   getPending,
   resolvePending,
+  reopenPending,
 };

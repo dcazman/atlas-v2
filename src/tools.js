@@ -525,6 +525,28 @@ function registerTools(server, auth) {
     return json({ checked_tickets: tickets.length, live_pieces: pieces.length, drifted, orphaned, missing });
   });
 
+  guarded('board_bump', {
+    title: 'Bump a board piece to the top',
+    description:
+      'Dan override: bump a piece to the top of the board ("work on N"). Default order is oldest-first; ' +
+      'a bumped piece floats above that. The most recently bumped sits highest. Use board_unbump to clear.',
+    inputSchema: { section: SECTION, row_id: z.number().int() },
+  }, async ({ section, row_id }) => {
+    const r = db.bumpBoardRow(section, row_id);
+    if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
+    return json({ ok: true, bumped: row_id });
+  });
+
+  guarded('board_unbump', {
+    title: 'Clear a board piece bump',
+    description: 'Remove a piece\'s bump so it returns to the default oldest-first order.',
+    inputSchema: { section: SECTION, row_id: z.number().int() },
+  }, async ({ section, row_id }) => {
+    const r = db.bumpBoardRow(section, row_id, true);
+    if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
+    return json({ ok: true, unbumped: row_id });
+  });
+
   // -------------------------------------------------------------------------
   // PENDING TRAY (PCT-15801 Phase 2, item 2). Candidates with no ticket yet.
   // Three fates, each leaving an events trace: merge into a piece / promote to a
@@ -625,6 +647,19 @@ function registerTools(server, auth) {
     db.resolvePending(section, pending_id, 'dismissed', { resolution_note: reason });
     db.logEvent(section, `Board: dismissed pending #${pending_id} (${p.source}${p.source_ref ? ' ' + p.source_ref : ''}) - ${reason}`);
     return json({ ok: true, dismissed: pending_id });
+  });
+
+  guarded('pending_reopen', {
+    title: 'Recover a resolved tray item',
+    description:
+      'Un-dismiss / recover a resolved (dismissed / merged / promoted) pending item back into the tray. ' +
+      'For fixing a wrong dismissal - the item was retained in the store; this brings it back to pending.',
+    inputSchema: { section: SECTION, pending_id: z.number().int() },
+  }, async ({ section, pending_id }) => {
+    const r = db.reopenPending(section, pending_id);
+    if (!r.ok) return text(`No pending item ${pending_id} in ${section}.`);
+    db.logEvent(section, `Board: recovered pending #${pending_id} back to the tray`);
+    return json({ ok: true, reopened: pending_id });
   });
 }
 
