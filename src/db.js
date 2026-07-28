@@ -236,6 +236,7 @@ db.exec(`
     section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
     source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('slack','jira','email','calendar','manual')),
     source_ref TEXT,
+    source_date TEXT,
     summary TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','merged','promoted','dismissed')),
     merged_into INTEGER REFERENCES board_rows(id) ON DELETE SET NULL,
@@ -258,6 +259,15 @@ db.exec(`
 // require-ticket CHECK. This bump records the DB is at v4 for future migrations.
 if (db.prepare('PRAGMA user_version').get().user_version < 4) {
   db.exec('PRAGMA user_version = 4');
+}
+
+// v5: pending_items.source_date — the origin ticket's real date (e.g. Jira
+// created), so age reflects the ticket's TRUE age, not time-in-tray. Additive
+// ALTER guarded by user_version so it runs once; try/catch covers the fresh
+// install where the CREATE block already added the column.
+if (db.prepare('PRAGMA user_version').get().user_version < 5) {
+  try { db.exec('ALTER TABLE pending_items ADD COLUMN source_date TEXT'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 5');
 }
 
 function findEntity(section, name) {
@@ -584,9 +594,9 @@ function updateBoardRow(section, id, fields = {}) {
 // ---------------------------------------------------------------------------
 function addPendingItem(section, summary, opts = {}) {
   const info = db.prepare(
-    `INSERT INTO pending_items (section, summary, source, source_ref)
-     VALUES (?, ?, COALESCE(?, 'manual'), ?)`
-  ).run(section, summary, opts.source ?? null, opts.source_ref ?? null);
+    `INSERT INTO pending_items (section, summary, source, source_ref, source_date)
+     VALUES (?, ?, COALESCE(?, 'manual'), ?, ?)`
+  ).run(section, summary, opts.source ?? null, opts.source_ref ?? null, opts.source_date ?? null);
   return { pending_id: info.lastInsertRowid };
 }
 

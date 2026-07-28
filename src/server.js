@@ -171,7 +171,7 @@ function renderBoard() {
       + `<td>${esc(p.waiting_on || '')}</td><td class="age">${boardDaysSince(p.status_changed_at)}</td></tr>`;
   }).join('');
   const pendRows = pending.map((p) =>
-    `<tr><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.created_at)}</td></tr>`
+    `<tr><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
   ).join('');
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -246,7 +246,7 @@ boardApp.get('/api', (req, res) => {
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
     pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, related: rel(p.related), waiting_on: p.waiting_on, age_days: boardDaysSince(p.status_changed_at) })),
-    pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.created_at) })),
+    pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
   });
 });
 boardApp.listen(BOARD_PORT, () => console.log('board view (read-only) on port ' + BOARD_PORT + ' section=' + BOARD_SECTION));

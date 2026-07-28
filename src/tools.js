@@ -532,7 +532,8 @@ function registerTools(server, auth) {
   // items drop out of pending_list by design (VIEW vs STORE, obs 875).
   // -------------------------------------------------------------------------
   function decoratePending(p) {
-    return { ...p, age_days: ageDays(p.created_at) };
+    // age from the ticket's real date when danfeed supplied it, else tray-arrival.
+    return { ...p, age_days: ageDays(p.source_date || p.created_at) };
   }
 
   guarded('pending_add', {
@@ -546,9 +547,10 @@ function registerTools(server, auth) {
       summary: z.string().describe('One line: what this is.'),
       source: z.enum(['slack', 'jira', 'email', 'calendar', 'manual']).optional().describe('Where it came from (default manual).'),
       source_ref: z.string().optional().describe('Origin id: slack ts+channel, jira key, etc.'),
+      source_date: z.string().optional().describe('The origin ticket/message real date (e.g. the Jira created date, ISO). Age is computed from this when present, so it reflects the ticket\'s true age, not time-in-tray.'),
     },
-  }, async ({ section, summary, source, source_ref }) => {
-    return json(db.addPendingItem(section, summary, { source, source_ref }));
+  }, async ({ section, summary, source, source_ref, source_date }) => {
+    return json(db.addPendingItem(section, summary, { source, source_ref, source_date }));
   });
 
   guarded('pending_list', {
