@@ -167,7 +167,7 @@ function renderBoard() {
     let rel = [];
     try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
     return `<tr><td class="id">${p.id}</td><td>${esc(p.title)}</td><td>${badge(p.status)}</td>`
-      + `<td class="tk">${rel.map((r) => esc(r)).join(' ')}</td>`
+      + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
       + `<td>${esc(p.waiting_on || '')}</td><td class="age">${boardDaysSince(p.status_changed_at)}</td></tr>`;
   }).join('');
   const pendRows = pending.map((p) =>
@@ -195,7 +195,9 @@ function renderBoard() {
   th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
   td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
   td.age{color:#8b94a3;font-variant-numeric:tabular-nums;width:52px}
-  td.tk{color:#7aa2f7;font-family:ui-monospace,monospace;font-size:12px}
+  td.tk{color:#7aa2f7;font-family:ui-monospace,monospace;font-size:12px;line-height:1.7}
+  td.tk a{color:#7aa2f7;text-decoration:none}
+  td.tk a:hover{text-decoration:underline}
   td.src{color:#8b94a3;font-size:12px}
   .b{font-size:11px;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
   .b-active{background:#14532d;color:#86efac}
