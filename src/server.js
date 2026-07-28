@@ -223,4 +223,20 @@ function show(w){for(const [id,name] of [['board','tb'],['pending','tp']]){docum
 const boardApp = express();
 boardApp.get('/', (req, res) => { res.set('Content-Type', 'text/html; charset=utf-8'); res.send(renderBoard()); });
 boardApp.get('/health', (req, res) => res.json({ ok: true, service: 'atlas-board', section: BOARD_SECTION, port: BOARD_PORT }));
+
+// JSON feed of the board — what the SessionStart hook curls to inject the live
+// board into Claude's context deterministically at every chat start. LAN, no auth.
+boardApp.get('/api', (req, res) => {
+  let pieces = [], pending = [];
+  try { pieces = dbMod.listBoardRows(BOARD_SECTION, false); } catch (e) {}
+  try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
+  const rel = (r) => { try { return JSON.parse(r); } catch (e) { return [r]; } };
+  res.json({
+    as_of: boardStamp(),
+    section: BOARD_SECTION,
+    counts: { pieces: pieces.length, pending: pending.length },
+    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, related: rel(p.related), waiting_on: p.waiting_on, age_days: boardDaysSince(p.status_changed_at) })),
+    pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.created_at) })),
+  });
+});
 boardApp.listen(BOARD_PORT, () => console.log('board view (read-only) on port ' + BOARD_PORT + ' section=' + BOARD_SECTION));
