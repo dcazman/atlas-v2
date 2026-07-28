@@ -438,3 +438,30 @@ This keeps full-landscape pulls affordable without a tiered landscape.
   Requires an Anthropic API key available to the worker. Report-only for first two weeks.
   Est. cost at current data size: under $0.25/night.
 - Manual run: `docker exec atlas-v2 node /app/src/groom.js`
+
+---
+
+## Structured Board — v3/v4 (PCT-15801, added 2026-07-27)
+
+Atlas's prose board (obs 801) was reworked into typed, rule-enforcing rows Dan can see and
+correct through a read-only web view. **Purpose** (obs 874): a visible, trustworthy,
+prioritized plan across Dan's work streams — Jira is the spine (real work has a ticket);
+email/Slack/calendar are tributaries that document Dan doing X. Dan is the auditor and
+corrects by challenging (read-only loop, obs 839). **Governing rule** (obs 873): every rule
+is a deterministic DB fence (CHECK / FK / trigger), never a convention someone has to
+remember — because a list kept by memory is exactly the list you can't trust.
+
+- **Two tables.** `board_rows` — pieces of real work; `related` must hold ≥1 ticket (CHECK);
+  three trigger-owned clocks (`created_at` lifespan, `updated_at` freshness,
+  `status_changed_at` stuck-ness). `pending_items` — the no-ticket tray; fates
+  merge / promote / dismiss, each retained + traced, nothing silently deleted. Migrations
+  bumped user_version 3 then 4. **Full schema + tool list in README.md.**
+- **9 tools** (`board_*` / `pending_*`), 27 total. Lists oldest-first. Merge/promote are
+  propose-then-confirm (nothing auto-promotes).
+- **Read-only view:** LAN page on port **7795** (`http://192.168.50.23:7795/`), 2 tabs, 30s
+  refresh, not tunneled / no auth. VIEW vs STORE (obs 875): the view shows live items only;
+  the store keeps everything (closed/merged/dismissed are dismissed-from-view, not deleted).
+- **Design of record:** obs 872 (schema), 874 (north star + operating model), 875 (view law),
+  873 (governing rule), 870 (Dan working model). Seeded 2026-07-27 (13 pieces + 2 pending).
+- **Remaining:** item-3 close/delete refuse trigger; danfeed→pending auto-feed;
+  reconcile-at-boot fence. Until reconcile exists the board is a manual snapshot and drifts.

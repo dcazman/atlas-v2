@@ -208,3 +208,55 @@ Full server rebuild order: `warehouse/UNRAID-REBUILD.md`.
 
 ---
 *Recovery references: Atlas → personal → "Unraid Recovery Audit" obs #509 · Secrets: Anchor notes 308/309 · 2026-07-10*
+
+---
+
+# v3 / v4 — Structured Board (PCT-15801, 2026-07-27)
+
+Atlas gained a typed, rule-enforcing **work board** — the prose board (a single big
+observation, obs 801) reworked into structured rows Dan can SEE and correct. Design of
+record: Atlas work obs **872** (schema), **874** (north star + operating model), **875**
+(view-vs-store), **873** (governing rule: every rule is a DB fence, never a convention
+someone must remember).
+
+## Tables (migrations: user_version 3 added `board_rows`; 4 added require-ticket + `pending_items`)
+
+**board_rows** — one row per piece of real work. "On the board => it has a ticket."
+- `id` immutable PK (never reused = permanent address)
+- `title`
+- `status` CHECK in (active, waiting, blocked, done)
+- `related` JSON array of ticket numbers — **NOT NULL + CHECK json_array_length >= 1** (a piece must carry ≥1 ticket)
+- `waiting_on`
+- `closure_ref` FK → events.id (the "ledger line"; the refuse-without-it trigger is item 3, not yet wired)
+- `created_at` (lifespan clock), `updated_at`, `status_changed_at`
+- Triggers: `board_rows_touch` bumps `updated_at` on every write; `board_rows_status_stamp`
+  moves `status_changed_at` only on a real status change. The engine owns the clocks — no code path has to remember.
+
+**pending_items** — the tray: candidates with no ticket yet.
+- `id`, `section`, `source` (slack/jira/email/calendar/manual), `source_ref`, `summary`
+- `state` CHECK in (pending, merged, promoted, dismissed) — non-pending = resolved: hidden from view, retained in store
+- `merged_into` FK → board_rows.id (provenance link), `resolution_note`
+- `created_at`, `resolved_at` (trigger `pending_items_resolve` stamps it the moment it leaves `pending`)
+
+## Tools (9 new; 27 total)
+`board_add` (related **required**), `board_list`, `board_get`, `board_update` ·
+`pending_add`, `pending_list`, `pending_merge`, `pending_promote`, `pending_dismiss`.
+Lists are **oldest-first** (the order is the query, not memory). Merge/promote/dismiss each
+leave an `events` trace and retain the row (nothing silently vanishes). Merge & promote are
+**propose-then-confirm** — Claude proposes, Dan confirms; nothing auto-promotes.
+
+## Read-only view
+A plain HTTP page on **port 7795** (host-published, **LAN only — NOT on the Cloudflare
+tunnel, so no auth gate**). Internal URL: **http://192.168.50.23:7795/**. Two tabs (Jira
+Board / Pending), oldest-first, auto-refresh 30s. Renders straight off the tables;
+done/merged/dismissed are dismissed-from-view but kept in the store (VIEW vs STORE). Env:
+`BOARD_PORT` (7795), `BOARD_SECTION` (work). Served by a second Express listener in
+`src/server.js`. No day-of view — Dan keeps his own calendar; the calendar is Claude's input, not a rebuilt tab.
+
+## Status / remaining
+Built & deployed (user_version 4). Board seeded 2026-07-27 with 13 real pieces + 2 pending.
+**Not yet built:** item-3 close/delete refuse-without-`closure_ref` trigger; danfeed→pending
+auto-feed; reconcile-at-boot fence (board self-checks vs Jira/danfeed). **Until reconcile
+exists the seed is a manual snapshot and will drift** — trust it to *see and correct*, not blind.
+
+*Board added by the c-atlas conductor thread, 2026-07-27.*
