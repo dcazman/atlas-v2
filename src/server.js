@@ -138,6 +138,10 @@ app.listen(PORT, () => console.log('atlas-mcp v2 running on port ' + PORT));
 const BOARD_PORT = process.env.BOARD_PORT || 7795;
 const BOARD_SECTION = process.env.BOARD_SECTION || 'work';
 
+// Atlas mark — the titan holding the world (globe + arms cradling it). Amber,
+// reads on the dark board. Used inline in the header and as the favicon.
+const ATLAS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="23" r="15" fill="none" stroke="#e0b24a" stroke-width="3"/><path d="M17 23h30M32 8v30M22 13c7 6 13 6 20 0M22 33c7-6 13-6 20 0" fill="none" stroke="#e0b24a" stroke-width="1.3" opacity="0.7"/><path d="M13 58c1-13 9-16 19-11 10-5 18-2 19 11" fill="none" stroke="#e0b24a" stroke-width="3.2" stroke-linecap="round"/></svg>';
+
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -172,11 +176,14 @@ function renderBoard() {
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="30">
-<title>Dan · Board</title>
+<title>Atlas</title>
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ATLAS_SVG)}">
 <style>
   body{font:15px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
   header{padding:14px 18px;border-bottom:1px solid #2a2f3a;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
-  h1{font-size:16px;margin:0;font-weight:600}
+  h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.06em}
+  .logo{display:inline-flex;align-items:center}
+  .logo svg{width:30px;height:30px}
   .meta{color:#8b94a3;font-size:12px}
   .tabs{display:flex;gap:6px;padding:12px 18px 0}
   .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
@@ -199,7 +206,8 @@ function renderBoard() {
   footer{color:#5b6472;font-size:11px;padding:0 18px 22px}
 </style></head><body>
 <header>
-  <h1>Dan · Board</h1>
+  <span class="logo">${ATLAS_SVG}</span>
+  <h1>ATLAS</h1>
   <span class="meta">as of ${esc(boardStamp())}</span>
   <span class="meta">${pieces.length} live pieces &middot; ${pending.length} pending</span>
 </header>
