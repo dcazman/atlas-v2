@@ -238,9 +238,11 @@ someone must remember).
 - `merged_into` FK → board_rows.id (provenance link), `resolution_note`
 - `created_at`, `resolved_at` (trigger `pending_items_resolve` stamps it the moment it leaves `pending`)
 
-## Tools (9 new; 27 total)
-`board_add` (related **required**), `board_list`, `board_get`, `board_update` ·
+## Tools (11 new; 29 total)
+`board_add` (related **required**), `board_list`, `board_get`, `board_update`, `board_close`, `board_reconcile` ·
 `pending_add`, `pending_list`, `pending_merge`, `pending_promote`, `pending_dismiss`.
+`board_close` writes a ledger event and sets done+closure_ref (the sanctioned close). `board_reconcile`
+is a deterministic drift diff (drifted/orphaned/missing) vs a caller-supplied ticket snapshot (Jira or danfeed).
 Lists are **oldest-first** (the order is the query, not memory). Merge/promote/dismiss each
 leave an `events` trace and retain the row (nothing silently vanishes). Merge & promote are
 **propose-then-confirm** — Claude proposes, Dan confirms; nothing auto-promotes.
@@ -253,10 +255,25 @@ done/merged/dismissed are dismissed-from-view but kept in the store (VIEW vs STO
 `BOARD_PORT` (7795), `BOARD_SECTION` (work). Served by a second Express listener in
 `src/server.js`. No day-of view — Dan keeps his own calendar; the calendar is Claude's input, not a rebuilt tab.
 
-## Status / remaining
-Built & deployed (user_version 4). Board seeded 2026-07-27 with 13 real pieces + 2 pending.
-**Not yet built:** item-3 close/delete refuse-without-`closure_ref` trigger; danfeed→pending
-auto-feed; reconcile-at-boot fence (board self-checks vs Jira/danfeed). **Until reconcile
-exists the seed is a manual snapshot and will drift** — trust it to *see and correct*, not blind.
+## Lifecycle fences (item 3)
+Two triggers: `board_rows_close_needs_ledger` (status=done is refused unless `closure_ref` is set — no
+close without a ledger line) and `board_rows_no_delete` (pieces are never hard-deleted; retire by closing).
 
-*Board added by the c-atlas conductor thread, 2026-07-27.*
+## Boot hook + `/api`
+`GET /api` on the board server returns the live board as JSON (LAN, no auth). The Claude Code SessionStart
+hook curls it and injects the board into context at every new chat, then instructs a `board_reconcile`
+against Jira/danfeed. Deterministic board-in-context; the auto-drift-in-hook rides the danfeed upgrade.
+
+## Trust / act-vs-ask
+Claude decides act-vs-ask by the Trust model (Atlas shared obs 879) + Known Traps floor (obs 880): act on
+source-confirmed facts, propose on judgment, hard must-ask floors for irreversible/trap/low-confidence. The
+`/agenda` skill (`.claude/skills/agenda`) runs the full routine under this model.
+
+## Status / remaining
+Built & deployed (user_version 4), branded **ATLAS**. Phase 2 items 1–4 done: typed board, require-ticket,
+pending tray, lifecycle fences, reconcile, read-only view (port 7795), boot hook, trust model. Board seeded
+2026-07-27 (13 pieces + 2 pending). **Remaining:** danfeed→pending auto-feed and auto-drift-injection in the
+hook (both ride the danfeed upgrade — Atlas side is ready via `pending_add` + `board_reconcile`); Phase 3
+session anchor. Until the auto-feed lands, the board is reconcile-on-demand, not self-updating.
+
+*Board built by the c-atlas conductor thread, 2026-07-27/28.*

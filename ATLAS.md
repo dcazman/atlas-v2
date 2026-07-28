@@ -456,12 +456,18 @@ remember — because a list kept by memory is exactly the list you can't trust.
   `status_changed_at` stuck-ness). `pending_items` — the no-ticket tray; fates
   merge / promote / dismiss, each retained + traced, nothing silently deleted. Migrations
   bumped user_version 3 then 4. **Full schema + tool list in README.md.**
-- **9 tools** (`board_*` / `pending_*`), 27 total. Lists oldest-first. Merge/promote are
-  propose-then-confirm (nothing auto-promotes).
+- **11 tools** (`board_*` / `pending_*`), 29 total — incl. `board_close` (ledger-line close) and
+  `board_reconcile` (deterministic drift diff). Lists oldest-first. Merge/promote/close are
+  propose-then-confirm (nothing auto-promotes). Item-3 lifecycle fences live (no close without a
+  ledger line; pieces never hard-deleted).
+- **Read-only view** branded ATLAS (logo + favicon) with a `GET /api` JSON feed; the SessionStart
+  boot hook injects the live board every chat and instructs a reconcile. Act-vs-ask follows the
+  Trust model (obs 879) + Known Traps floor (obs 880); the `/agenda` skill runs the full routine.
 - **Read-only view:** LAN page on port **7795** (`http://192.168.50.23:7795/`), 2 tabs, 30s
   refresh, not tunneled / no auth. VIEW vs STORE (obs 875): the view shows live items only;
   the store keeps everything (closed/merged/dismissed are dismissed-from-view, not deleted).
 - **Design of record:** obs 872 (schema), 874 (north star + operating model), 875 (view law),
   873 (governing rule), 870 (Dan working model). Seeded 2026-07-27 (13 pieces + 2 pending).
-- **Remaining:** item-3 close/delete refuse trigger; danfeed→pending auto-feed;
-  reconcile-at-boot fence. Until reconcile exists the board is a manual snapshot and drifts.
+- **Remaining:** danfeed→pending auto-feed and auto-drift-injection in the boot hook (both ride
+  Dan's danfeed upgrade — Atlas side is ready via `pending_add` + `board_reconcile`); Phase 3
+  session anchor. Until the auto-feed lands, the board is reconcile-on-demand, not self-updating.
