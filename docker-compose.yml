@@ -14,3 +14,11 @@ services:
       - ATLAS_DB_PATH=/app/data/atlas.db
     volumes:
       - /mnt/user/appdata/atlas-v2:/app/data
+    networks:
+      - default
+      - health-net
+
+networks:
+  default:
+  health-net:
+    external: true
