@@ -212,6 +212,20 @@ db.exec(`
     WHEN OLD.status <> NEW.status
     BEGIN UPDATE board_rows SET status_changed_at = datetime('now') WHERE id = NEW.id; END;
 
+  -- item 3 (lifecycle fences). A piece cannot be marked done without a closure_ref
+  -- (a ledger line = events.id): close-without-a-record is refused by the engine.
+  CREATE TRIGGER IF NOT EXISTS board_rows_close_needs_ledger
+    BEFORE UPDATE OF status ON board_rows FOR EACH ROW
+    WHEN NEW.status = 'done' AND NEW.closure_ref IS NULL
+    BEGIN SELECT RAISE(ABORT, 'cannot close a board piece without closure_ref (a ledger line)'); END;
+
+  -- Board pieces are NEVER hard-deleted (immutable addresses; closed pieces drop
+  -- from view but are retained forever). Retire a piece by closing it, not deleting.
+  -- (DROP TABLE in a migration is DDL and does not fire this row trigger.)
+  CREATE TRIGGER IF NOT EXISTS board_rows_no_delete
+    BEFORE DELETE ON board_rows FOR EACH ROW
+    BEGIN SELECT RAISE(ABORT, 'board pieces are not deleted; close them (status=done + closure_ref)'); END;
+
   -- v4: PENDING TRAY (PCT-15801 Phase 2, item 2). Candidates with no ticket yet.
   -- Own immutable ids (never reused). A pending item's fate is merge / promote /
   -- dismiss - each leaves a trace (nothing silently vanishes). state != 'pending'

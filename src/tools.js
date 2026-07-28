@@ -468,6 +468,62 @@ function registerTools(server, auth) {
     return json(r);
   });
 
+  guarded('board_close', {
+    title: 'Close a board piece',
+    description:
+      'Close a board piece the sanctioned way: writes a ledger line (an events entry) and sets ' +
+      'status=done with closure_ref pointing at it. The DB refuses status=done without a closure_ref ' +
+      '(item 3 fence), so this is how closing happens. Closed pieces drop from the live view but are ' +
+      'retained forever. Propose to Dan; run on his confirm.',
+    inputSchema: {
+      section: SECTION,
+      row_id: z.number().int(),
+      closure: z.string().describe('The closure reason / outcome - becomes the ledger line.'),
+    },
+  }, async ({ section, row_id, closure }) => {
+    const piece = db.getBoardRow(section, row_id);
+    if (!piece) return text(`No board piece ${row_id} in ${section}.`);
+    if (piece.status === 'done') return text(`Board piece ${row_id} is already done.`);
+    const ev = db.logEvent(section, `Closed board piece #${row_id} ${piece.related} - ${closure}`);
+    const r = db.updateBoardRow(section, row_id, { status: 'done', closure_ref: ev.event_id });
+    if (!r.ok) return text(`Close failed for ${row_id}: ${r.reason || 'unknown'}.`);
+    return json({ ok: true, closed: row_id, closure_ref: ev.event_id });
+  });
+
+  guarded('board_reconcile', {
+    title: 'Reconcile board against a ticket snapshot',
+    description:
+      'Deterministic drift check between the live board and an authoritative ticket snapshot (pass ' +
+      'current tickets from Jira or danfeed). Returns: drifted (piece not done but its ticket is done ' +
+      'in the snapshot), orphaned (piece whose ticket is absent from the snapshot), missing (open ' +
+      'snapshot tickets not on any live piece). The diff is the mechanism; the caller supplies the ' +
+      'snapshot. Report only - changes nothing. This is the reconcile-at-boot core; danfeed/hook feed it.',
+    inputSchema: {
+      section: SECTION,
+      tickets: z.array(z.object({
+        key: z.string(),
+        done: z.boolean().describe('True if the source considers this ticket resolved/closed.'),
+      })).describe('Authoritative current ticket snapshot (Jira or danfeed /jira).'),
+    },
+  }, async ({ section, tickets }) => {
+    const snap = new Map(tickets.map((t) => [t.key, !!t.done]));
+    const pieces = db.listBoardRows(section, false); // live pieces only
+    const onBoard = new Set();
+    const drifted = [], orphaned = [];
+    for (const p of pieces) {
+      let rel = [];
+      try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
+      rel.forEach((k) => onBoard.add(k));
+      const known = rel.filter((k) => snap.has(k));
+      if (known.length === 0) { orphaned.push({ row_id: p.id, related: rel, title: p.title }); continue; }
+      if (known.some((k) => snap.get(k) === true)) {
+        drifted.push({ row_id: p.id, related: rel, status: p.status, title: p.title, note: 'ticket done in source, piece not' });
+      }
+    }
+    const missing = tickets.filter((t) => !t.done && !onBoard.has(t.key)).map((t) => t.key);
+    return json({ checked_tickets: tickets.length, live_pieces: pieces.length, drifted, orphaned, missing });
+  });
+
   // -------------------------------------------------------------------------
   // PENDING TRAY (PCT-15801 Phase 2, item 2). Candidates with no ticket yet.
   // Three fates, each leaving an events trace: merge into a piece / promote to a
