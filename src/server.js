@@ -168,7 +168,7 @@ function renderBoard() {
     try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
     return `<tr><td class="id">${p.id}</td><td>${esc(p.title)}</td><td>${badge(p.status)}</td>`
       + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
-      + `<td>${esc(p.waiting_on || '')}</td><td class="age">${boardDaysSince(p.status_changed_at)}</td></tr>`;
+      + `<td>${esc(p.waiting_on || '')}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
   }).join('');
   const pendRows = pending.map((p) =>
     `<tr><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
@@ -245,7 +245,7 @@ boardApp.get('/api', (req, res) => {
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
-    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, related: rel(p.related), waiting_on: p.waiting_on, age_days: boardDaysSince(p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, related: rel(p.related), waiting_on: p.waiting_on, age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
   });
 });

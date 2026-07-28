@@ -394,8 +394,8 @@ function registerTools(server, auth) {
     return {
       ...row,
       related: safeParse(row.related),
-      age_days: ageDays(row.status_changed_at),   // stuck-ness: time in current status
-      lifespan_days: ageDays(row.created_at),      // total age since created
+      age_days: ageDays(row.source_date || row.status_changed_at),   // true ticket age when known, else stuck-ness
+      lifespan_days: ageDays(row.source_date || row.created_at),      // true ticket age when known, else time-on-board
     };
   }
 
@@ -411,9 +411,10 @@ function registerTools(server, auth) {
       status: BOARD_STATUS.optional().describe('Defaults to "active".'),
       related: z.array(z.string()).min(1).describe('Required - one or more ticket numbers, e.g. ["PCT-15801"]. A board piece must carry a ticket ("on the board => it has a ticket").'),
       waiting_on: z.string().optional().describe('Who or what the row is blocked on (for waiting/blocked rows).'),
+      source_date: z.string().optional().describe('The ticket real date (e.g. Jira created, ISO) so board age reflects true ticket age, not time-on-board.'),
     },
-  }, async ({ section, title, status, related, waiting_on }) => {
-    return json(db.addBoardRow(section, title, { status, related, waiting_on }));
+  }, async ({ section, title, status, related, waiting_on, source_date }) => {
+    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date }));
   });
 
   guarded('board_list', {
@@ -601,7 +602,7 @@ function registerTools(server, auth) {
     const p = db.getPending(section, pending_id);
     if (!p) return text(`No pending item ${pending_id} in ${section}.`);
     if (p.state !== 'pending') return text(`Pending ${pending_id} already ${p.state}.`);
-    const { row_id } = db.addBoardRow(section, title, { related, status, waiting_on });
+    const { row_id } = db.addBoardRow(section, title, { related, status, waiting_on, source_date: p.source_date });
     db.resolvePending(section, pending_id, 'promoted', { merged_into: row_id });
     db.logEvent(section, `Board: promoted pending #${pending_id} (${p.source}${p.source_ref ? ' ' + p.source_ref : ''}) to new piece #${row_id} ${JSON.stringify(related)} - ${title}`);
     return json({ ok: true, promoted: pending_id, new_piece: row_id });

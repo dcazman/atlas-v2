@@ -190,6 +190,7 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','waiting','blocked','done')),
     related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
     waiting_on TEXT,
+    source_date TEXT,
     closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -268,6 +269,14 @@ if (db.prepare('PRAGMA user_version').get().user_version < 4) {
 if (db.prepare('PRAGMA user_version').get().user_version < 5) {
   try { db.exec('ALTER TABLE pending_items ADD COLUMN source_date TEXT'); } catch (e) { /* already present */ }
   db.exec('PRAGMA user_version = 5');
+}
+
+// v6: board_rows.source_date — the piece's ticket real date (e.g. Jira created),
+// so board age reflects the ticket's TRUE age, not time-on-board. Additive ALTER,
+// guarded; try/catch covers fresh installs where CREATE already added it.
+if (db.prepare('PRAGMA user_version').get().user_version < 6) {
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN source_date TEXT'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 6');
 }
 
 function findEntity(section, name) {
@@ -554,9 +563,9 @@ function addBoardRow(section, title, opts = {}) {
     throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
   }
   const info = db.prepare(
-    `INSERT INTO board_rows (section, title, status, related, waiting_on)
-     VALUES (?, ?, COALESCE(?, 'active'), ?, ?)`
-  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null);
+    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date)
+     VALUES (?, ?, COALESCE(?, 'active'), ?, ?, ?)`
+  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null);
   return { row_id: info.lastInsertRowid };
 }
 
@@ -581,6 +590,7 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.waiting_on !== undefined)  { sets.push('waiting_on = ?');  vals.push(fields.waiting_on); }
   if (fields.related !== undefined)     { sets.push('related = ?');     vals.push(typeof fields.related === 'string' ? fields.related : JSON.stringify(fields.related)); }
   if (fields.closure_ref !== undefined) { sets.push('closure_ref = ?'); vals.push(fields.closure_ref); }
+  if (fields.source_date !== undefined) { sets.push('source_date = ?'); vals.push(fields.source_date); }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
