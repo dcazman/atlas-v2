@@ -18,8 +18,11 @@ function text(str) {
 // string; hand callers the parsed array.
 function ageDays(ts) {
   if (!ts) return null;
-  const t = new Date(ts.replace(' ', 'T') + 'Z');
-  return Math.floor((Date.now() - t.getTime()) / 86400000);
+  // SQLite datetimes are "YYYY-MM-DD HH:MM:SS" (UTC, needs T+Z); Jira/email dates
+  // are already ISO/RFC and parse directly. Return null (not NaN) if unparseable.
+  const iso = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(ts) ? ts.replace(' ', 'T') + 'Z' : ts;
+  const t = new Date(iso);
+  return isNaN(t.getTime()) ? null : Math.floor((Date.now() - t.getTime()) / 86400000);
 }
 function safeParse(s) {
   try { return JSON.parse(s); } catch { return s; }
@@ -412,9 +415,10 @@ function registerTools(server, auth) {
       related: z.array(z.string()).min(1).describe('Required - one or more ticket numbers, e.g. ["PCT-15801"]. A board piece must carry a ticket ("on the board => it has a ticket").'),
       waiting_on: z.string().optional().describe('Who or what the row is blocked on (for waiting/blocked rows).'),
       source_date: z.string().optional().describe('The ticket real date (e.g. Jira created, ISO) so board age reflects true ticket age, not time-on-board.'),
+      in_sprint: z.boolean().optional().describe('True if the ticket is in the current active sprint (drives current-sprint-first ordering). danfeed supplies this.'),
     },
-  }, async ({ section, title, status, related, waiting_on, source_date }) => {
-    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date }));
+  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint }) => {
+    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0 }));
   });
 
   guarded('board_list', {
@@ -457,13 +461,15 @@ function registerTools(server, auth) {
       status: BOARD_STATUS.optional(),
       related: z.array(z.string()).optional().describe('Replaces the related list.'),
       waiting_on: z.string().optional(),
+      in_sprint: z.boolean().optional().describe('Mark whether the ticket is in the current active sprint (danfeed maintains this).'),
     },
-  }, async ({ section, row_id, title, status, related, waiting_on }) => {
+  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint }) => {
     const fields = {};
     if (title !== undefined) fields.title = title;
     if (status !== undefined) fields.status = status;
     if (related !== undefined) fields.related = related;
     if (waiting_on !== undefined) fields.waiting_on = waiting_on;
+    if (in_sprint !== undefined) fields.in_sprint = in_sprint;
     const r = db.updateBoardRow(section, row_id, fields);
     if (!r.ok) return text(`No board row ${row_id} in ${section}.`);
     return json(r);

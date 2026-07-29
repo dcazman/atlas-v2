@@ -192,6 +192,7 @@ db.exec(`
     waiting_on TEXT,
     source_date TEXT,
     priority INTEGER,
+    in_sprint INTEGER NOT NULL DEFAULT 0,
     closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -285,6 +286,13 @@ if (db.prepare('PRAGMA user_version').get().user_version < 6) {
 if (db.prepare('PRAGMA user_version').get().user_version < 7) {
   try { db.exec('ALTER TABLE board_rows ADD COLUMN priority INTEGER'); } catch (e) { /* already present */ }
   db.exec('PRAGMA user_version = 7');
+}
+
+// v8: board_rows.in_sprint — 1 if the ticket is in the current active sprint
+// (danfeed supplies it). Drives "current sprint first" ordering.
+if (db.prepare('PRAGMA user_version').get().user_version < 8) {
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN in_sprint INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 8');
 }
 
 function findEntity(section, name) {
@@ -571,9 +579,9 @@ function addBoardRow(section, title, opts = {}) {
     throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
   }
   const info = db.prepare(
-    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date)
-     VALUES (?, ?, COALESCE(?, 'active'), ?, ?, ?)`
-  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null);
+    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint)
+     VALUES (?, ?, COALESCE(?, 'active'), ?, ?, ?, COALESCE(?, 0))`
+  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null);
   return { row_id: info.lastInsertRowid };
 }
 
@@ -581,7 +589,7 @@ function listBoardRows(section, includeDone) {
   // oldest-first, top->down (Dan Jul 27). The order is the query, not memory.
   // bumped pieces (priority set, lowest first) float to the top; the rest are
   // oldest-first by true ticket age (source_date), else created_at.
-  const ORDER = 'ORDER BY (priority IS NULL), priority ASC, COALESCE(source_date, created_at) ASC, id ASC';
+  const ORDER = 'ORDER BY (priority IS NULL), priority ASC, in_sprint DESC, COALESCE(source_date, created_at) ASC, id ASC';
   const sql = includeDone
     ? `SELECT * FROM board_rows WHERE section = ? ${ORDER}`
     : `SELECT * FROM board_rows WHERE section = ? AND status != 'done' ${ORDER}`;
@@ -603,6 +611,7 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.closure_ref !== undefined) { sets.push('closure_ref = ?'); vals.push(fields.closure_ref); }
   if (fields.source_date !== undefined) { sets.push('source_date = ?'); vals.push(fields.source_date); }
   if (fields.priority !== undefined) { sets.push('priority = ?'); vals.push(fields.priority); }
+  if (fields.in_sprint !== undefined) { sets.push('in_sprint = ?'); vals.push(fields.in_sprint ? 1 : 0); }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);

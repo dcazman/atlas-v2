@@ -149,8 +149,9 @@ function esc(s) {
 }
 function boardDaysSince(ts) {
   if (!ts) return '';
-  const t = new Date(ts.replace(' ', 'T') + 'Z');
-  return Math.floor((Date.now() - t.getTime()) / 86400000) + 'd';
+  const iso = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(ts) ? ts.replace(' ', 'T') + 'Z' : ts;
+  const t = new Date(iso);
+  return isNaN(t.getTime()) ? '' : Math.floor((Date.now() - t.getTime()) / 86400000) + 'd';
 }
 function boardStamp() {
   return new Intl.DateTimeFormat('en-US', {
@@ -214,8 +215,8 @@ function renderBoard() {
   <span class="meta">${pieces.length} live pieces &middot; ${pending.length} pending</span>
 </header>
 <div class="tabs">
-  <button id="tb" class="on" onclick="show('board')">Jira Board (${pieces.length})</button>
-  <button id="tp" onclick="show('pending')">Pending (${pending.length})</button>
+  <button id="tb" class="on" onclick="show('board')">Board (${pieces.length})</button>
+  <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
 </div>
 <div id="board" class="panel on">
   ${pieces.length ? `<table><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Tickets</th><th>Waiting on</th><th>Age</th></tr></thead><tbody>${pieceRows}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
