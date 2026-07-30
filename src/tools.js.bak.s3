@@ -391,7 +391,7 @@ function registerTools(server, auth) {
   // 873). No delete tool yet: deletion and its closure-refuse fence land
   // together in item 3, so the destructive path never ships without its fence.
   // -------------------------------------------------------------------------
-  const BOARD_STATUS = z.enum(['todo', 'in_progress', 'on_hold', 'done']);
+  const BOARD_STATUS = z.enum(['active', 'waiting', 'blocked', 'done']);
 
   function decorate(row) {
     return {
@@ -399,7 +399,6 @@ function registerTools(server, auth) {
       related: safeParse(row.related),
       age_days: ageDays(row.source_date || row.status_changed_at),   // true ticket age when known, else stuck-ness
       lifespan_days: ageDays(row.source_date || row.created_at),      // true ticket age when known, else time-on-board
-      needs_note: row.status !== 'todo' && row.status !== 'done' && !(row.waiting_on && String(row.waiting_on).trim()),  // FLAG: non-todo piece missing its comment -> Claude fills or asks Dan
     };
   }
 
@@ -412,15 +411,14 @@ function registerTools(server, auth) {
     inputSchema: {
       section: SECTION,
       title: z.string().describe('Short row headline.'),
-      status: BOARD_STATUS.optional().describe('Defaults to "todo".'),
+      status: BOARD_STATUS.optional().describe('Defaults to "active".'),
       related: z.array(z.string()).min(1).describe('Required - one or more ticket numbers, e.g. ["PCT-15801"]. A board piece must carry a ticket ("on the board => it has a ticket").'),
       waiting_on: z.string().optional().describe('Who or what the row is blocked on (for waiting/blocked rows).'),
       source_date: z.string().optional().describe('The ticket real date (e.g. Jira created, ISO) so board age reflects true ticket age, not time-on-board.'),
       in_sprint: z.boolean().optional().describe('True if the ticket is in the current active sprint (drives current-sprint-first ordering). danfeed supplies this.'),
-      sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
     },
-  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint, sprint }) => {
-    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0, sprint }));
+  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint }) => {
+    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0 }));
   });
 
   guarded('board_list', {
@@ -464,16 +462,16 @@ function registerTools(server, auth) {
       related: z.array(z.string()).optional().describe('Replaces the related list.'),
       waiting_on: z.string().optional(),
       in_sprint: z.boolean().optional().describe('Mark whether the ticket is in the current active sprint (danfeed maintains this).'),
-      sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
+      holding: z.boolean().optional().describe('Move into (true) or out of (false) the bottom holding band.'),
     },
-  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint, sprint }) => {
+  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint, holding }) => {
     const fields = {};
     if (title !== undefined) fields.title = title;
     if (status !== undefined) fields.status = status;
     if (related !== undefined) fields.related = related;
     if (waiting_on !== undefined) fields.waiting_on = waiting_on;
     if (in_sprint !== undefined) fields.in_sprint = in_sprint;
-    if (sprint !== undefined) fields.sprint = sprint;
+    if (holding !== undefined) fields.holding = holding;
     const r = db.updateBoardRow(section, row_id, fields);
     if (!r.ok) return text(`No board row ${row_id} in ${section}.`);
     return json(r);
@@ -571,21 +569,20 @@ function registerTools(server, auth) {
   });
 
   guarded('board_hold', {
-    title: 'Put a piece On Hold (bottom band)',
+    title: 'Drop a piece to the holding band',
     description:
-      'Dan "drop X" / "hold X": set the piece to On Hold - sinks it to the bottom band (not lost, just ' +
-      'last) and clears any pin. A reason is preferred (paraphrase of the ticket); if omitted the piece is ' +
-      'flagged needs_note for Claude to fill or ask Dan - never blocked. Pair with Jira -> On Hold + comment (board-ops skill).',
-    inputSchema: { section: SECTION, row_id: z.number().int(), reason: z.string().optional().describe('Short reason it is on hold (paraphrase of the ticket). Optional - omit and it is flagged as needing a note.') },
-  }, async ({ section, row_id, reason }) => {
-    const r = db.holdBoardRow(section, row_id, reason);
+      'Dan "drop X" / "hold X": sink the piece into the bottom holding band (not lost, just last) and ' +
+      'clear any pin. The paired Jira -> On Hold + smart comment is done by the caller (board-ops skill).',
+    inputSchema: { section: SECTION, row_id: z.number().int() },
+  }, async ({ section, row_id }) => {
+    const r = db.holdBoardRow(section, row_id);
     if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
-    return json({ ok: true, on_hold: row_id });
+    return json({ ok: true, holding: row_id });
   });
 
   guarded('board_release', {
     title: 'Release a piece from holding',
-    description: 'Take a piece off On Hold - back to To Do in the normal order (clears the hold reason).',
+    description: 'Bring a held piece back into the normal oldest-first order (clears holding).',
     inputSchema: { section: SECTION, row_id: z.number().int() },
   }, async ({ section, row_id }) => {
     const r = db.releaseBoardRow(section, row_id);

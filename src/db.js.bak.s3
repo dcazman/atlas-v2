@@ -122,99 +122,6 @@ if (userVersion < 4 && hasBoardRows) {
   console.log('atlas v4 migration complete (board_rows require-ticket)');
 }
 
-// ---------------------------------------------------------------------------
-// v10 MIGRATION (status vocabulary = the real Jira/GSSD states, board-only).
-// active/waiting/blocked -> todo/in_progress/on_hold/done. Drops the separate
-// `holding` column (On Hold IS the bottom band now, driven by status) and adds a
-// CHECK that an On Hold piece MUST carry a waiting_on reason (Dan Jul 29: "on
-// hold always has a reason"). Remap: done->done; active->in_progress;
-// waiting/blocked WITH a reason->on_hold; waiting/blocked with NO reason->todo
-// (a blank "waiting" was really never-looked-at = To Do). Table rebuild (a CHECK
-// cannot be ALTERed). Runs before the CREATE block so the rebuilt table wins.
-// ---------------------------------------------------------------------------
-const hasBoardRowsV10 = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='board_rows'").get();
-if (userVersion < 10 && hasBoardRowsV10) {
-  db.exec('PRAGMA foreign_keys = OFF;');
-  db.exec('BEGIN;');
-  db.exec(`
-    CREATE TABLE board_rows_v10 (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
-      title TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','in_progress','on_hold','done')),
-      related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
-      waiting_on TEXT,
-      source_date TEXT,
-      priority INTEGER,
-      in_sprint INTEGER NOT NULL DEFAULT 0,
-      closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      status_changed_at TEXT NOT NULL DEFAULT (datetime('now')),
-      CHECK (status <> 'on_hold' OR (waiting_on IS NOT NULL AND length(trim(waiting_on)) > 0))
-    );
-    INSERT INTO board_rows_v10 (id, section, title, status, related, waiting_on, source_date, priority, in_sprint, closure_ref, created_at, updated_at, status_changed_at)
-      SELECT id, section, title,
-        CASE
-          WHEN status = 'done' THEN 'done'
-          WHEN status = 'active' THEN 'in_progress'
-          WHEN status IN ('waiting','blocked') AND waiting_on IS NOT NULL AND length(trim(waiting_on)) > 0 THEN 'on_hold'
-          ELSE 'todo'
-        END,
-        related, waiting_on, source_date, priority, in_sprint, closure_ref, created_at, updated_at, status_changed_at
-      FROM board_rows;
-    DROP TABLE board_rows;
-    ALTER TABLE board_rows_v10 RENAME TO board_rows;
-  `);
-  db.exec('COMMIT;');
-  db.exec('PRAGMA foreign_keys = ON;');
-  const fkErrorsV10 = db.prepare('PRAGMA foreign_key_check').all();
-  if (fkErrorsV10.length > 0) { console.error('FATAL: foreign_key_check failed after v10 migration:', JSON.stringify(fkErrorsV10)); process.exit(1); }
-  db.exec('PRAGMA user_version = 10');
-  console.log('atlas v10 migration complete (Jira-state status vocab + on_hold reason fence)');
-}
-
-// ---------------------------------------------------------------------------
-// v12 MIGRATION: convert the On Hold "reason required" fence into a FLAG. Dan Jul
-// 29: Jira is master, the board is a partner/mirror - it must never REFUSE a Jira
-// state. Rebuild board_rows WITHOUT the on_hold CHECK. A missing comment on a
-// non-todo piece is surfaced as needs_note (computed at read time) for Claude to
-// fill or ask Dan - never blocked. All columns/rows preserved (incl v11 sprint).
-// ---------------------------------------------------------------------------
-const hasBoardRowsV12 = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='board_rows'").get();
-if (userVersion < 12 && hasBoardRowsV12) {
-  db.exec('PRAGMA foreign_keys = OFF;');
-  db.exec('BEGIN;');
-  db.exec(`
-    CREATE TABLE board_rows_v12 (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
-      title TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','in_progress','on_hold','done')),
-      related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
-      waiting_on TEXT,
-      source_date TEXT,
-      priority INTEGER,
-      in_sprint INTEGER NOT NULL DEFAULT 0,
-      sprint TEXT,
-      closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      status_changed_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    INSERT INTO board_rows_v12 (id, section, title, status, related, waiting_on, source_date, priority, in_sprint, sprint, closure_ref, created_at, updated_at, status_changed_at)
-      SELECT id, section, title, status, related, waiting_on, source_date, priority, in_sprint, sprint, closure_ref, created_at, updated_at, status_changed_at FROM board_rows;
-    DROP TABLE board_rows;
-    ALTER TABLE board_rows_v12 RENAME TO board_rows;
-  `);
-  db.exec('COMMIT;');
-  db.exec('PRAGMA foreign_keys = ON;');
-  const fkErrorsV12 = db.prepare('PRAGMA foreign_key_check').all();
-  if (fkErrorsV12.length > 0) { console.error('FATAL: foreign_key_check failed after v12 migration:', JSON.stringify(fkErrorsV12)); process.exit(1); }
-  db.exec('PRAGMA user_version = 12');
-  console.log('atlas v12 migration complete (on_hold fence -> flag; board mirrors Jira, never refuses)');
-}
-
 db.exec(`
   PRAGMA foreign_keys = ON;
 
@@ -280,13 +187,13 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
     title TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','in_progress','on_hold','done')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','waiting','blocked','done')),
     related TEXT NOT NULL CHECK (json_valid(related) AND json_array_length(related) >= 1),
     waiting_on TEXT,
     source_date TEXT,
     priority INTEGER,
     in_sprint INTEGER NOT NULL DEFAULT 0,
-    sprint TEXT,
+    holding INTEGER NOT NULL DEFAULT 0,
     closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -389,27 +296,12 @@ if (db.prepare('PRAGMA user_version').get().user_version < 8) {
   db.exec('PRAGMA user_version = 8');
 }
 
-// v9 (holding column) was superseded by v10 below, which drops it: On Hold IS the
-// bottom band now, driven by status, not a separate flag. This ensures the schema
-// version reaches 10 on FRESH installs (table created new with the current schema,
-// where the v10 rebuild block is skipped).
-if (db.prepare('PRAGMA user_version').get().user_version < 10) {
-  db.exec('PRAGMA user_version = 10');
-}
-
-// v11: board_rows.sprint - the sprint number/label for display (e.g. "15"), so the
-// board can show a Sprint column next to Status. danfeed populates it from the
-// ticket's active Jira sprint; blank when not in a sprint. Ordering still uses
-// in_sprint (boolean) - this is display only. Additive ALTER, guarded.
-if (db.prepare('PRAGMA user_version').get().user_version < 11) {
-  try { db.exec('ALTER TABLE board_rows ADD COLUMN sprint TEXT'); } catch (e) { /* already present */ }
-  db.exec('PRAGMA user_version = 11');
-}
-
-// ensure fresh installs reach 12 (the v12 rebuild is skipped when the table is
-// created new by the CREATE block, which already omits the on_hold CHECK).
-if (db.prepare('PRAGMA user_version').get().user_version < 12) {
-  db.exec('PRAGMA user_version = 12');
+// v9: board_rows.holding - the bottom "holding" band. A dropped/held piece
+// (holding=1) sinks below everything and Jira goes On Hold; not lost, just last
+// (Dan Jul 29). Additive ALTER, guarded; try/catch covers fresh installs.
+if (db.prepare('PRAGMA user_version').get().user_version < 9) {
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN holding INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 9');
 }
 
 function findEntity(section, name) {
@@ -696,9 +588,9 @@ function addBoardRow(section, title, opts = {}) {
     throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
   }
   const info = db.prepare(
-    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint)
-     VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?)`
-  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null, opts.sprint ?? null);
+    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint)
+     VALUES (?, ?, COALESCE(?, 'active'), ?, ?, ?, COALESCE(?, 0))`
+  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null);
   return { row_id: info.lastInsertRowid };
 }
 
@@ -706,7 +598,7 @@ function listBoardRows(section, includeDone) {
   // oldest-first, top->down (Dan Jul 27). The order is the query, not memory.
   // bumped pieces (priority set, lowest first) float to the top; the rest are
   // oldest-first by true ticket age (source_date), else created_at.
-  const ORDER = "ORDER BY (priority IS NULL), priority ASC, in_sprint DESC, (status = 'on_hold') ASC, COALESCE(source_date, created_at) ASC, id ASC";
+  const ORDER = 'ORDER BY holding ASC, (priority IS NULL), priority ASC, in_sprint DESC, COALESCE(source_date, created_at) ASC, id ASC';
   const sql = includeDone
     ? `SELECT * FROM board_rows WHERE section = ? ${ORDER}`
     : `SELECT * FROM board_rows WHERE section = ? AND status != 'done' ${ORDER}`;
@@ -729,7 +621,7 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.source_date !== undefined) { sets.push('source_date = ?'); vals.push(fields.source_date); }
   if (fields.priority !== undefined) { sets.push('priority = ?'); vals.push(fields.priority); }
   if (fields.in_sprint !== undefined) { sets.push('in_sprint = ?'); vals.push(fields.in_sprint ? 1 : 0); }
-  if (fields.sprint !== undefined) { sets.push('sprint = ?'); vals.push(fields.sprint); }
+  if (fields.holding !== undefined) { sets.push('holding = ?'); vals.push(fields.holding ? 1 : 0); }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
@@ -755,18 +647,13 @@ function moveBoardRow(section, id, position) {
   const row = getBoardRow(section, id);
   if (!row) return { ok: false, reason: 'not_found' };
   const pinned = db.prepare(
-    "SELECT id FROM board_rows WHERE section = ? AND priority IS NOT NULL AND status NOT IN ('on_hold','done') AND id != ? ORDER BY priority ASC, id ASC"
+    "SELECT id FROM board_rows WHERE section = ? AND priority IS NOT NULL AND holding = 0 AND status != 'done' AND id != ? ORDER BY priority ASC, id ASC"
   ).all(section, id).map((r) => r.id);
   let pos = parseInt(position, 10);
   if (isNaN(pos) || pos < 1) pos = 1;
   const idx = Math.min(pos - 1, pinned.length);
   pinned.splice(idx, 0, id);
-  // moving a piece brings it onto the ranked board: if it was On Hold, un-hold it
-  // to To Do (clearing the hold reason) so it can sit up top like a normal piece.
-  if (row.status === 'on_hold') {
-    db.prepare("UPDATE board_rows SET status = 'todo', waiting_on = NULL WHERE id = ? AND section = ?").run(id, section);
-  }
-  const stmt = db.prepare('UPDATE board_rows SET priority = ? WHERE id = ? AND section = ?');
+  const stmt = db.prepare('UPDATE board_rows SET priority = ?, holding = 0 WHERE id = ? AND section = ?');
   pinned.forEach((rid, i) => stmt.run(i + 1, rid, section));
   return { ok: true, row_id: id, position: idx + 1, pinned_order: pinned };
 }
@@ -774,21 +661,17 @@ function moveBoardRow(section, id, position) {
 // Drop/hold a piece into the bottom holding band (Dan's "drop X" / "hold X").
 // holding=1 sinks it below all non-held pieces; priority cleared so it is no
 // longer pinned. The paired Jira -> On Hold is done by the caller/skill.
-function holdBoardRow(section, id, reason) {
+function holdBoardRow(section, id) {
   const row = getBoardRow(section, id);
   if (!row) return { ok: false, reason: 'not_found' };
-  // reason OPTIONAL (board mirrors Jira, never refuses). A missing note is surfaced
-  // as needs_note for Claude to fill or ask Dan - not blocked.
-  const fields = { status: 'on_hold', priority: null };
-  if (reason !== undefined && reason !== null) fields.waiting_on = reason;
-  return updateBoardRow(section, id, fields);
+  return updateBoardRow(section, id, { holding: 1, priority: null });
 }
 
 // Release a piece from the holding band back to the normal (auto) order.
 function releaseBoardRow(section, id) {
   const row = getBoardRow(section, id);
   if (!row) return { ok: false, reason: 'not_found' };
-  return updateBoardRow(section, id, { status: 'todo', waiting_on: null });
+  return updateBoardRow(section, id, { holding: 0 });
 }
 
 // ---------------------------------------------------------------------------

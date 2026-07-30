@@ -399,7 +399,6 @@ function registerTools(server, auth) {
       related: safeParse(row.related),
       age_days: ageDays(row.source_date || row.status_changed_at),   // true ticket age when known, else stuck-ness
       lifespan_days: ageDays(row.source_date || row.created_at),      // true ticket age when known, else time-on-board
-      needs_note: row.status !== 'todo' && row.status !== 'done' && !(row.waiting_on && String(row.waiting_on).trim()),  // FLAG: non-todo piece missing its comment -> Claude fills or asks Dan
     };
   }
 
@@ -574,12 +573,12 @@ function registerTools(server, auth) {
     title: 'Put a piece On Hold (bottom band)',
     description:
       'Dan "drop X" / "hold X": set the piece to On Hold - sinks it to the bottom band (not lost, just ' +
-      'last) and clears any pin. A reason is preferred (paraphrase of the ticket); if omitted the piece is ' +
-      'flagged needs_note for Claude to fill or ask Dan - never blocked. Pair with Jira -> On Hold + comment (board-ops skill).',
-    inputSchema: { section: SECTION, row_id: z.number().int(), reason: z.string().optional().describe('Short reason it is on hold (paraphrase of the ticket). Optional - omit and it is flagged as needing a note.') },
+      'last) and clears any pin. REQUIRES a reason (the DB refuses On Hold without a waiting_on reason). ' +
+      'The paired Jira -> On Hold + smart comment is done by the caller (board-ops skill).',
+    inputSchema: { section: SECTION, row_id: z.number().int(), reason: z.string().min(1).describe('Short reason it is on hold (a paraphrase of the ticket) - required.') },
   }, async ({ section, row_id, reason }) => {
     const r = db.holdBoardRow(section, row_id, reason);
-    if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
+    if (!r.ok) return text(r.reason === 'needs_reason' ? 'On Hold requires a reason.' : `No board piece ${row_id} in ${section}.`);
     return json({ ok: true, on_hold: row_id });
   });
 

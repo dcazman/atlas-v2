@@ -706,7 +706,7 @@ function listBoardRows(section, includeDone) {
   // oldest-first, top->down (Dan Jul 27). The order is the query, not memory.
   // bumped pieces (priority set, lowest first) float to the top; the rest are
   // oldest-first by true ticket age (source_date), else created_at.
-  const ORDER = "ORDER BY (priority IS NULL), priority ASC, in_sprint DESC, (status = 'on_hold') ASC, COALESCE(source_date, created_at) ASC, id ASC";
+  const ORDER = "ORDER BY (status = 'on_hold') ASC, (priority IS NULL), priority ASC, in_sprint DESC, COALESCE(source_date, created_at) ASC, id ASC";
   const sql = includeDone
     ? `SELECT * FROM board_rows WHERE section = ? ${ORDER}`
     : `SELECT * FROM board_rows WHERE section = ? AND status != 'done' ${ORDER}`;

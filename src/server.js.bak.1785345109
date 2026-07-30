@@ -163,33 +163,20 @@ function renderBoard() {
   let pieces = [], pending = [];
   try { pieces = dbMod.listBoardRows(BOARD_SECTION, false); } catch (e) { /* render empty on error */ }
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
-  const badge = (s) => `<span class="b b-${esc(s)}">${esc(String(s).replace(/_/g, ' '))}</span>`;
-  const isPinned = (p) => p.priority !== null && p.priority !== undefined;
-  const working = pieces.filter((p) => isPinned(p));
-  const sprint  = pieces.filter((p) => !isPinned(p) && p.in_sprint);
-  const rest    = pieces.filter((p) => !isPinned(p) && !p.in_sprint);
-  const sprintNo = sprint.length ? (sprint[0].sprint || '') : '';
-  let _n = 0;
-  const row = (p, zr) => {
-    _n += 1;
+  const badge = (s) => `<span class="b b-${esc(s)}">${esc(s)}</span>`;
+  const pieceRows = pieces.map((p) => {
     let rel = [];
     try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
-    const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim());
-    const cls = zr + (p.status === 'on_hold' ? ' hold' : '');
-    return `<tr class="${cls}"><td class="pos">${_n}</td><td>${esc(p.title)}</td><td>${badge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
+    return `<tr><td class="id">${p.id}</td><td>${esc(p.title)}</td><td>${badge(p.status)}</td>`
       + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
-      + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
-  };
-  const hdr = (label, zh) => `<tr class="zonehdr ${zh}"><td colspan="7">${esc(label)}</td></tr>`;
-  let body = '';
-  if (working.length) body += hdr('WORKING ON', 'zh-work') + working.map((p) => row(p, 'zr-work')).join('');
-  if (sprint.length)  body += hdr('CURRENT SPRINT' + (sprintNo ? ' · ' + sprintNo : ''), 'zh-sprint') + sprint.map((p) => row(p, 'zr-sprint')).join('');
-  if (rest.length)    body += hdr('EVERYTHING ELSE', 'zh-rest') + rest.map((p) => row(p, 'zr-rest')).join('');
-  const pendRows = pending.map((p, i) =>
-    `<tr><td class="pos">${i + 1}</td><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
+      + `<td>${esc(p.waiting_on || '')}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
+  }).join('');
+  const pendRows = pending.map((p) =>
+    `<tr><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
   ).join('');
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
 <title>Atlas</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ATLAS_SVG)}">
 <style>
@@ -208,27 +195,15 @@ function renderBoard() {
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #222833;vertical-align:top}
   th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
   td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
-  td.pos{color:#4b5563;font-variant-numeric:tabular-nums;width:30px}
-  td.sp{color:#9fb0c3;font-variant-numeric:tabular-nums;width:54px;text-align:center}
-  td.note-flag{color:#e0a04a;font-style:italic}
-  tr.zonehdr td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;padding:16px 10px 6px;border-bottom:2px solid #313846;background:#0f1115}
-  tr.zh-work td{color:#7ab3ff}
-  tr.zh-sprint td{color:#86efac}
-  tr.zh-rest td{color:#fde68a}
-  tr.zr-work td{background:rgba(59,130,246,0.09)}
-  tr.zr-sprint td{background:rgba(34,197,94,0.08)}
-  tr.zr-rest td{background:rgba(234,179,8,0.05)}
-  tr.hold td{opacity:.5}
-  tr.hold td.id{border-left:2px solid #4a3a12}
   td.age{color:#8b94a3;font-variant-numeric:tabular-nums;width:52px}
   td.tk{color:#7aa2f7;font-family:ui-monospace,monospace;font-size:12px;line-height:1.7}
   td.tk a{color:#7aa2f7;text-decoration:none}
   td.tk a:hover{text-decoration:underline}
   td.src{color:#8b94a3;font-size:12px}
-  .b{font-size:11px;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;display:inline-block}
-  .b-todo{background:#26303f;color:#9fb0c3}
-  .b-in_progress{background:#14532d;color:#86efac}
-  .b-on_hold{background:#4a3a12;color:#fde68a}
+  .b{font-size:11px;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
+  .b-active{background:#14532d;color:#86efac}
+  .b-waiting{background:#4a3a12;color:#fde68a}
+  .b-blocked{background:#4c1d24;color:#fca5a5}
   .b-done{background:#26303f;color:#93a3b8}
   .empty{color:#8b94a3;padding:24px 0}
   footer{color:#5b6472;font-size:11px;padding:0 18px 22px}
@@ -244,16 +219,14 @@ function renderBoard() {
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
 </div>
 <div id="board" class="panel on">
-  ${pieces.length ? `<table><thead><tr><th>Pos</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th>Note</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${pieces.length ? `<table><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Tickets</th><th>Waiting on</th><th>Age</th></tr></thead><tbody>${pieceRows}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="pending" class="panel">
-  ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
+  ${pending.length ? `<table><thead><tr><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
 </div>
 <footer>Read-only. Oldest first. Live pieces + untriaged pending only &mdash; the store keeps everything else. Auto-refreshes every 30s.</footer>
 <script>
-function show(w){for(const [id,name] of [['board','tb'],['pending','tp']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending')show('pending');}catch(e){}})();
-setInterval(function(){location.reload();},30000);
+function show(w){for(const [id,name] of [['board','tb'],['pending','tp']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}}
 </script>
 </body></html>`;
 }
@@ -273,7 +246,7 @@ boardApp.get('/api', (req, res) => {
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
-    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, related: rel(p.related), waiting_on: p.waiting_on, age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
   });
 });
