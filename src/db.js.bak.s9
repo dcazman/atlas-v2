@@ -705,10 +705,6 @@ function addBoardRow(section, title, opts = {}) {
   if (!Array.isArray(arr) || arr.length === 0) {
     throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
   }
-  const primary = String(arr[0] || '');
-  if (!/^PCT-/.test(primary) && !/^GSSD-/.test(primary)) {
-    throw new Error('board membership: the primary ticket must be PCT- or GSSD- (Dan is tracked in PCT/GSSD). ' + primary + ' is a driver (INFRA/CHANGE/PIRISK/SECARCH/etc.) and belongs in a needs-a-story state, not a board piece.');
-  }
   const info = db.prepare(
     `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint)
      VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?)`

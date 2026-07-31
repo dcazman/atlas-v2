@@ -287,7 +287,6 @@ db.exec(`
     priority INTEGER,
     in_sprint INTEGER NOT NULL DEFAULT 0,
     sprint TEXT,
-    on_board INTEGER NOT NULL DEFAULT 1,
     closure_ref INTEGER REFERENCES events(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -411,15 +410,6 @@ if (db.prepare('PRAGMA user_version').get().user_version < 11) {
 // created new by the CREATE block, which already omits the on_hold CHECK).
 if (db.prepare('PRAGMA user_version').get().user_version < 12) {
   db.exec('PRAGMA user_version = 12');
-}
-
-// v13: board_rows.on_board - a piece can leave the live board WITHOUT being closed
-// (Dan Jul 30: epics/capabilities are documents that make work, not board items;
-// a driver ticket leaves once its story exists). on_board=0 hides it from the view
-// but keeps it in the store (VIEW vs STORE) and never fakes a Jira-done. Additive.
-if (db.prepare('PRAGMA user_version').get().user_version < 13) {
-  try { db.exec('ALTER TABLE board_rows ADD COLUMN on_board INTEGER NOT NULL DEFAULT 1'); } catch (e) { /* already present */ }
-  db.exec('PRAGMA user_version = 13');
 }
 
 function findEntity(section, name) {
@@ -705,10 +695,6 @@ function addBoardRow(section, title, opts = {}) {
   if (!Array.isArray(arr) || arr.length === 0) {
     throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
   }
-  const primary = String(arr[0] || '');
-  if (!/^PCT-/.test(primary) && !/^GSSD-/.test(primary)) {
-    throw new Error('board membership: the primary ticket must be PCT- or GSSD- (Dan is tracked in PCT/GSSD). ' + primary + ' is a driver (INFRA/CHANGE/PIRISK/SECARCH/etc.) and belongs in a needs-a-story state, not a board piece.');
-  }
   const info = db.prepare(
     `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint)
      VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?)`
@@ -722,8 +708,8 @@ function listBoardRows(section, includeDone) {
   // oldest-first by true ticket age (source_date), else created_at.
   const ORDER = "ORDER BY (priority IS NULL), priority ASC, in_sprint DESC, (status = 'on_hold') ASC, COALESCE(source_date, created_at) ASC, id ASC";
   const sql = includeDone
-    ? `SELECT * FROM board_rows WHERE section = ? AND on_board = 1 ${ORDER}`
-    : `SELECT * FROM board_rows WHERE section = ? AND on_board = 1 AND status != 'done' ${ORDER}`;
+    ? `SELECT * FROM board_rows WHERE section = ? ${ORDER}`
+    : `SELECT * FROM board_rows WHERE section = ? AND status != 'done' ${ORDER}`;
   return db.prepare(sql).all(section);
 }
 
@@ -744,7 +730,6 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.priority !== undefined) { sets.push('priority = ?'); vals.push(fields.priority); }
   if (fields.in_sprint !== undefined) { sets.push('in_sprint = ?'); vals.push(fields.in_sprint ? 1 : 0); }
   if (fields.sprint !== undefined) { sets.push('sprint = ?'); vals.push(fields.sprint); }
-  if (fields.on_board !== undefined) { sets.push('on_board = ?'); vals.push(fields.on_board ? 1 : 0); }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);

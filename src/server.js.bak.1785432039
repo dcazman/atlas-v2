@@ -206,7 +206,7 @@ function renderBoard() {
   .panel.on{display:block}
   table{width:100%;border-collapse:collapse;margin-top:8px}
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #222833;vertical-align:top}
-  th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;background:#0f1115;z-index:5;box-shadow:inset 0 -1px 0 #222833}
+  th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
   td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
   td.pos{color:#4b5563;font-variant-numeric:tabular-nums;width:30px}
   td.sp{color:#9fb0c3;font-variant-numeric:tabular-nums;width:54px;text-align:center}

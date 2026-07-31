@@ -593,34 +593,6 @@ function registerTools(server, auth) {
     return json({ ok: true, released: row_id });
   });
 
-  guarded('board_offboard', {
-    title: 'Take a piece off the board (not closed)',
-    description:
-      'Remove a piece from the live board WITHOUT closing it (does not touch Jira, does not fake Done). For ' +
-      'pieces that are not real board work: epics/capabilities (documents that make work), or a driver ticket ' +
-      '(GSSD/INFRA/CHANGE/PIRISK) whose work now lives in a PCT story. Kept in the store with an events trace ' +
-      '(VIEW vs STORE); reversible via board_restore.',
-    inputSchema: { section: SECTION, row_id: z.number().int(), reason: z.string().min(1).describe('Why it is not a board item (e.g. "Capability - a document that makes work" or "superseded by PCT-XXXX").') },
-  }, async ({ section, row_id, reason }) => {
-    const piece = db.getBoardRow(section, row_id);
-    if (!piece) return text(`No board piece ${row_id} in ${section}.`);
-    const r = db.updateBoardRow(section, row_id, { on_board: 0 });
-    if (!r.ok) return text(`Off-board failed for ${row_id}: ${r.reason || 'unknown'}.`);
-    db.logEvent(section, `Off-board piece #${row_id} ${piece.related} - ${reason}`);
-    return json({ ok: true, offboard: row_id });
-  });
-
-  guarded('board_restore', {
-    title: 'Restore a piece to the board',
-    description: 'Bring an off-board piece back onto the live board (on_board=1).',
-    inputSchema: { section: SECTION, row_id: z.number().int() },
-  }, async ({ section, row_id }) => {
-    const r = db.updateBoardRow(section, row_id, { on_board: 1 });
-    if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
-    db.logEvent(section, `Restored piece #${row_id} to the board`);
-    return json({ ok: true, restored: row_id });
-  });
-
   // -------------------------------------------------------------------------
   // PENDING TRAY (PCT-15801 Phase 2, item 2). Candidates with no ticket yet.
   // Three fates, each leaving an events trace: merge into a piece / promote to a
