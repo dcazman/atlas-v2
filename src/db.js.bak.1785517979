@@ -249,9 +249,7 @@ db.exec(`
     entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     trigger_date TEXT NOT NULL,
-    trigger_time TEXT,
     dismissed_at TEXT,
-    fired_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -424,18 +422,6 @@ if (db.prepare('PRAGMA user_version').get().user_version < 13) {
   db.exec('PRAGMA user_version = 13');
 }
 
-// v14: reminders.trigger_time (HH:MM, section tz = America/New_York) + reminders.fired_at.
-// A reminder WITH a trigger_time is a TIMED reminder: danfeed's reminder loop fires a
-// Slack DM to Dan at/after trigger_date+trigger_time (exactly once), then stamps fired_at
-// so it never re-fires. NULL trigger_time = legacy date-only reminder (surfaces in
-// get_landscape on/after the date, no active push). Additive ALTERs, guarded; try/catch
-// covers fresh installs where the CREATE block already added the columns.
-if (db.prepare('PRAGMA user_version').get().user_version < 14) {
-  try { db.exec('ALTER TABLE reminders ADD COLUMN trigger_time TEXT'); } catch (e) { /* already present */ }
-  try { db.exec('ALTER TABLE reminders ADD COLUMN fired_at TEXT'); } catch (e) { /* already present */ }
-  db.exec('PRAGMA user_version = 14');
-}
-
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -592,82 +578,36 @@ function logEvent(section, content, entityName) {
   return { event_id: info.lastInsertRowid };
 }
 
-function createReminder(section, content, triggerDate, entityName, triggerTime) {
+function createReminder(section, content, triggerDate, entityName) {
   let entityId = null;
   if (entityName) {
     entityId = ensureEntity(section, entityName).id;
   }
-  // trigger_time is optional. When present it must be HH:MM (24h), interpreted in the
-  // section timezone (America/New_York). It turns a reminder into a TIMED reminder that
-  // danfeed actively fires (Slack DM) at/after trigger_date+trigger_time. NULL = legacy
-  // date-only reminder (passive: surfaces in get_landscape on/after the date, no push).
-  let time = null;
-  if (triggerTime != null && String(triggerTime).trim() !== '') {
-    const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(triggerTime).trim());
-    if (!m) throw new Error(`trigger_time must be HH:MM (24h); got "${triggerTime}"`);
-    time = `${m[1].padStart(2, '0')}:${m[2]}`;
-  }
   const info = db.prepare(
-    'INSERT INTO reminders (section, entity_id, content, trigger_date, trigger_time) VALUES (?, ?, ?, ?, ?)'
-  ).run(section, entityId, content, triggerDate, time);
-  return { reminder_id: info.lastInsertRowid, trigger_date: triggerDate, trigger_time: time };
-}
-
-// Current wall-clock in America/New_York as a 'YYYY-MM-DDTHH:MM' key, for comparing
-// against a reminder's trigger_date+trigger_time (both stored in ET). Lexical string
-// compare is valid because every field is zero-padded and ordered most-significant first.
-function easternNowKey() {
-  const p = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York', hour12: false,
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  }).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
-  const hour = p.hour === '24' ? '00' : p.hour; // some engines emit '24' at midnight
-  return `${p.year}-${p.month}-${p.day}T${hour}:${p.minute}`;
+    'INSERT INTO reminders (section, entity_id, content, trigger_date) VALUES (?, ?, ?, ?)'
+  ).run(section, entityId, content, triggerDate);
+  return { reminder_id: info.lastInsertRowid, trigger_date: triggerDate };
 }
 
 function getActiveReminders(section) {
   return db.prepare(
-    `SELECT r.id, r.content, r.trigger_date, r.trigger_time, r.created_at, ent.name AS entity
+    `SELECT r.id, r.content, r.trigger_date, r.created_at, ent.name AS entity
      FROM reminders r LEFT JOIN entities ent ON ent.id = r.entity_id
      WHERE r.section = ? AND r.dismissed_at IS NULL AND r.trigger_date <= date('now')
      ORDER BY r.trigger_date ASC`
   ).all(section);
 }
 
-// Timed reminders whose ET datetime has arrived and that have NOT yet fired (and are
-// not dismissed). This is what danfeed's reminder loop pulls each tick to DM Dan. The
-// datetime compare is done in JS against ET (SQLite date/datetime('now') is UTC).
-function getDueReminders(section) {
-  const rows = db.prepare(
-    `SELECT r.id, r.content, r.trigger_date, r.trigger_time, r.created_at, ent.name AS entity
-     FROM reminders r LEFT JOIN entities ent ON ent.id = r.entity_id
-     WHERE r.section = ? AND r.dismissed_at IS NULL AND r.fired_at IS NULL
-       AND r.trigger_time IS NOT NULL
-     ORDER BY r.trigger_date ASC, r.trigger_time ASC`
-  ).all(section);
-  const nowKey = easternNowKey();
-  return rows.filter((r) => `${r.trigger_date}T${r.trigger_time}` <= nowKey);
-}
-
-// Stamp a timed reminder as fired so it never re-fires. The `fired_at IS NULL` guard
-// makes concurrent/overlapping poll ticks idempotent (only the first UPDATE wins).
-function markReminderFired(section, reminderId) {
-  const info = db.prepare(
-    "UPDATE reminders SET fired_at = datetime('now') WHERE id = ? AND section = ? AND fired_at IS NULL"
-  ).run(reminderId, section);
-  return info.changes > 0;
-}
-
 function listReminders(section, includeDismissed) {
   if (includeDismissed) {
     return db.prepare(
-      `SELECT r.id, r.content, r.trigger_date, r.trigger_time, r.dismissed_at, r.fired_at, r.created_at, ent.name AS entity
+      `SELECT r.id, r.content, r.trigger_date, r.dismissed_at, r.created_at, ent.name AS entity
        FROM reminders r LEFT JOIN entities ent ON ent.id = r.entity_id
        WHERE r.section = ? ORDER BY r.trigger_date ASC`
     ).all(section);
   }
   return db.prepare(
-    `SELECT r.id, r.content, r.trigger_date, r.trigger_time, r.fired_at, r.created_at, ent.name AS entity
+    `SELECT r.id, r.content, r.trigger_date, r.created_at, ent.name AS entity
      FROM reminders r LEFT JOIN entities ent ON ent.id = r.entity_id
      WHERE r.section = ? AND r.dismissed_at IS NULL ORDER BY r.trigger_date ASC`
   ).all(section);
@@ -923,8 +863,6 @@ module.exports = {
   search,
   createReminder,
   getActiveReminders,
-  getDueReminders,
-  markReminderFired,
   listReminders,
   dismissReminder,
   removeReminder,

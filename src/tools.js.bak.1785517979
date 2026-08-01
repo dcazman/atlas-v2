@@ -330,20 +330,15 @@ function registerTools(server, auth) {
       'Create a time-based reminder that will automatically appear in get_landscape output ' +
       'on or after its trigger date - no need for the user to bring it up again. ' +
       'Use for things like cert/license expirations, "start flagging X on date Y", or anything ' +
-      'with a known future date it should resurface on. ' +
-      'OPTIONAL trigger_time (HH:MM, 24h, America/New_York): set it to make this a TIMED reminder ' +
-      'that actively fires a Slack DM to Dan at/after that time (e.g. "ask Josh at 12:00", ' +
-      '"call the hotel at 15:00"), in addition to appearing in get_landscape. Omit trigger_time for ' +
-      'a date-only reminder (surfaces in get_landscape on/after the date, no active push).',
+      'with a known future date it should resurface on.',
     inputSchema: {
       section: SECTION,
       content: z.string().describe('The reminder text, written plainly, e.g. "Apple Push Cert expires September 2026 - action needed."'),
       trigger_date: z.string().describe('Date (YYYY-MM-DD) on or after which this reminder should start appearing in get_landscape.'),
-      trigger_time: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'trigger_time must be HH:MM (24h)').optional().describe('Optional HH:MM (24h), America/New_York. When set, the reminder actively fires a Slack DM to Dan at/after trigger_date+trigger_time (once). Omit for a date-only reminder.'),
       entity: z.string().optional().describe('Optional entity/topic name to link this reminder to.'),
     },
-  }, async ({ section, content, trigger_date, trigger_time, entity }) => {
-    return json(db.createReminder(section, content, trigger_date, entity, trigger_time));
+  }, async ({ section, content, trigger_date, entity }) => {
+    return json(db.createReminder(section, content, trigger_date, entity));
   });
 
   guarded('list_reminders', {
@@ -358,39 +353,6 @@ function registerTools(server, auth) {
     },
   }, async ({ section, include_dismissed }) => {
     return json(db.listReminders(section, include_dismissed));
-  });
-
-  // --- Timed-reminder firing (used by danfeed's reminder loop, not by chat) -------------
-  // These two power the "wake at a set time" feature: danfeed polls list_due_reminders,
-  // DMs Dan on Slack for each, then calls mark_reminder_fired so it never re-fires.
-  guarded('list_due_reminders', {
-    title: 'List due timed reminders',
-    description:
-      'List TIMED reminders (those with a trigger_time) whose date+time has arrived in ' +
-      'America/New_York and that have NOT yet fired and are not dismissed. This is the ' +
-      'firing queue polled by the reminder loop that DMs Dan; after delivering one, call ' +
-      'mark_reminder_fired with its id. (Normal chat should use get_landscape / list_reminders.)',
-    inputSchema: {
-      section: SECTION,
-    },
-  }, async ({ section }) => {
-    return json(db.getDueReminders(section));
-  });
-
-  guarded('mark_reminder_fired', {
-    title: 'Mark reminder fired',
-    description:
-      'Stamp a timed reminder as fired (delivered) so it will not fire again. Call this right ' +
-      'after successfully DMing Dan for a reminder returned by list_due_reminders. Idempotent: ' +
-      'a second call for the same id is a no-op. Does not dismiss the reminder - it still shows ' +
-      'in get_landscape until dismissed.',
-    inputSchema: {
-      section: SECTION,
-      reminder_id: z.number().int().describe('The id of the reminder that was just delivered.'),
-    },
-  }, async ({ section, reminder_id }) => {
-    const ok = db.markReminderFired(section, reminder_id);
-    return text(ok ? `Marked reminder ${reminder_id} fired.` : `No unfired reminder ${reminder_id} found in ${section}.`);
   });
 
   guarded('dismiss_reminder', {
