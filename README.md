@@ -354,4 +354,19 @@ way to tell it had gone stale.
   sprint / in_sprint the same way); polling-vs-on-demand and rate-limit
   handling are that follow-up's call to make, not decided here.
 
+## Two more view refinements (same day)
+
+- **Activity strip links to rows.** Each entry is now `<a href="#row-KEY">`
+  pointing at that row's anchor id (every rendered row carries `id="row-<ticket
+  key>"`); clicking jumps/scrolls straight to it with a brief highlight flash.
+- **GSSD pile.** Pieces carrying a raw `GSSD-*` key in `related` cluster as
+  one group at the **bottom of their own sprint block** - same "stays inside
+  its sprint block" rule On Hold already follows, just a lower position
+  within it, so they read as "the service-desk pile" at a glance instead of
+  scattered by age among the planned PCT stories. Display-order only - the
+  frozen Slot **number** a row already has is untouched.
+- Workflow rule (not built here, board-ops skill only): GSSD pieces now get
+  a fresh public Jira comment on a real cadence even while On Hold ("Pending
+  review this week" style), stricter than the normal hold-comment rule.
+
 *Board v-next shipped by the c-board worker thread, 2026-08-10.*
