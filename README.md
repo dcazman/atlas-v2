@@ -365,6 +365,11 @@ way to tell it had gone stale.
   within it, so they read as "the service-desk pile" at a glance instead of
   scattered by age among the planned PCT stories. Display-order only - the
   frozen Slot **number** a row already has is untouched.
+  **Fix (same day):** GSSD tickets carry no Jira sprint field at all, so
+  every GSSD piece had sprint='' and landed in Backlog - never reaching this
+  pile, which was exactly the forgettable spot it exists to avoid. A
+  GSSD-tagged piece with no sprint now defaults into the **active** sprint's
+  block instead. Non-GSSD sprint-less pieces still go to Backlog.
 - Workflow rule (not built here, board-ops skill only): GSSD pieces now get
   a fresh public Jira comment on a real cadence even while On Hold ("Pending
   review this week" style), stricter than the normal hold-comment rule.
