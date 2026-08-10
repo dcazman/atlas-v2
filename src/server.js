@@ -163,9 +163,28 @@ function boardBadge(s) {
   return `<span class="b b-${esc(s)}">${esc(String(s).replace(/_/g, ' '))}</span>`;
 }
 
-function slotRow(slot, p, isClosed) {
+function parseRelated(related) {
   let rel = [];
-  try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
+  try { rel = JSON.parse(related); } catch (e) { rel = [related]; }
+  return Array.isArray(rel) ? rel : [rel];
+}
+
+// A "GSSD piece" carries a raw GSSD-* key anywhere in related (Dan, 2026-08-10
+// - the service-desk pile, distinct from planned sprint stories).
+function hasGssdKey(related) {
+  return parseRelated(related).some((k) => /^GSSD-/i.test(String(k)));
+}
+
+// The anchor id a row is addressable at (activity strip links here). Ticket
+// key when there is one (there always should be - require-ticket CHECK), a
+// row-id fallback otherwise so a link never 404s into nothing.
+function rowAnchorId(related, rowId) {
+  const rel = parseRelated(related);
+  return 'row-' + encodeURIComponent((rel[0] || ('id' + rowId)));
+}
+
+function slotRow(slot, p, isClosed) {
+  const rel = parseRelated(p.related);
   const pinned = p.priority !== null && p.priority !== undefined;
   const numGrey = isClosed || pinned || p.status === 'in_progress';
   const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim());
@@ -175,7 +194,7 @@ function slotRow(slot, p, isClosed) {
     pinned ? 'pinned' : '',
   ].filter(Boolean).join(' ');
   const pin = pinned ? '<span class="pin" title="pinned - attention only, never changes status">\u{1F4CC}</span> ' : '';
-  return `<tr class="${rowCls}"><td class="pos${numGrey ? ' num-grey' : ''}">${esc(slot)}</td><td>${pin}${esc(p.title)}</td><td>${boardBadge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
+  return `<tr id="${rowAnchorId(p.related, p.id)}" class="${rowCls}"><td class="pos${numGrey ? ' num-grey' : ''}">${esc(slot)}</td><td>${pin}${esc(p.title)}</td><td>${boardBadge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
     + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
     + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td>`
     + `<td class="last-comment">${p.last_comment ? esc(p.last_comment) : '<span class=\"muted\">—</span>'}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
@@ -212,8 +231,20 @@ function renderSprintBlock(sprintLabel, group, isActive) {
   try { slots = dbMod.getSprintSlots(BOARD_SECTION, sprintLabel); } catch (e) {}
   const liveById = new Map(liveRows.map((p) => [p.id, p]));
   const closedById = new Map(group.closed.map((p) => [p.id, p]));
+  // GSSD pile (Dan, 2026-08-10): pieces carrying a raw GSSD-* key cluster as
+  // one group at the BOTTOM of their own sprint block, not interleaved by age
+  // with the planned PCT stories above them. This is a display-order pass
+  // only - it re-sorts how slots are WALKED for rendering, it does not touch
+  // the slot NUMBER itself (obs 980's frozen numbering is untouched; a row's
+  // number stays whatever it already was).
+  const related = (s) => {
+    const p = liveById.get(s.row_id) || closedById.get(s.row_id);
+    if (p) return p.related;
+    try { return dbMod.getBoardRow(BOARD_SECTION, s.row_id)?.related; } catch (e) { return null; }
+  };
+  const walkOrder = [...slots.filter((s) => !hasGssdKey(related(s))), ...slots.filter((s) => hasGssdKey(related(s)))];
   let rowsHtml = '';
-  for (const s of slots) {
+  for (const s of walkOrder) {
     const p = liveById.get(s.row_id);
     if (p) { rowsHtml += slotRow(s.slot, p, false); continue; }
     const c = closedById.get(s.row_id);
@@ -240,18 +271,23 @@ function renderBacklogBlock(rows) {
 
 // Activity strip (Board v-next item 4): what moved or closed recently, so
 // coming back to the board doesn't require re-deriving state from scratch.
+// Board v-next: activity items link to where the row actually sits on the
+// board (Dan, 2026-08-10) - jump/scroll to it in its sprint block instead of
+// being plain text. Same anchor scheme slotRow writes (rowAnchorId), so a
+// click lands exactly on the row if it's currently rendered anywhere on the
+// page; if its sprint has aged off the view the link is just a harmless
+// same-page no-op (nothing to 404 against).
 function activityStrip(activity) {
   if (!activity || !activity.length) return '<div class="activity empty-act">Nothing moved recently.</div>';
   const items = activity.map((a) => {
-    let rel = [];
-    try { rel = JSON.parse(a.related); } catch (e) { rel = [a.related]; }
+    const rel = parseRelated(a.related);
     const key = rel[0] || ('#' + a.row_id);
     const verb = a.kind === 'closed' ? 'closed'
       : a.kind === 'started' ? 'started'
       : a.kind === 'held' ? 'on hold'
       : a.kind === 'moved' ? ('→ S' + esc(a.sprint || ''))
       : 'back to todo';
-    return `<span class="act-item"><b>${esc(key)}</b> ${esc(verb)}</span>`;
+    return `<span class="act-item"><a href="#${rowAnchorId(a.related, a.row_id)}"><b>${esc(key)}</b></a> ${esc(verb)}</span>`;
   }).join('<span class="act-sep">·</span>');
   return `<div class="activity"><span class="activity-label">RECENT</span> ${items}</div>`;
 }
@@ -322,7 +358,9 @@ function renderBoard() {
 <title>Atlas</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ATLAS_SVG)}">
 <style>
+  html{scroll-behavior:smooth}
   body{font:15px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
+  tr:target td{background:rgba(224,178,74,0.22);transition:background 2.5s ease}
   header{padding:14px 18px;border-bottom:1px solid #2a2f3a;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
   h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.06em}
   .logo{display:inline-flex;align-items:center}
@@ -332,6 +370,8 @@ function renderBoard() {
   .activity.empty-act{color:#5b6472;font-style:italic}
   .activity-label{color:#6b7280;letter-spacing:.08em;font-size:10px;margin-right:10px}
   .act-item b{color:#e0b24a;font-weight:600}
+  .act-item a{text-decoration:none}
+  .act-item a:hover b{text-decoration:underline}
   .act-sep{color:#3a4150;margin:0 8px}
   .tabs{display:flex;gap:6px;padding:12px 18px 0}
   .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
