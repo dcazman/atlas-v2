@@ -49,6 +49,8 @@ the other section when the user explicitly says so (see project instructions bel
 | `search(section, query)` | Keyword search across entities, observations, events. |
 | `create_reminder(section, content, trigger_date, entity?)` | Create a reminder that surfaces in `get_landscape` on/after `trigger_date` (YYYY-MM-DD). |
 | `list_reminders(section, include_dismissed?)` | List reminders, including ones not yet due (or dismissed ones). |
+| `list_due_reminders(section)` | Everything currently due and not dismissed: date-only reminders (trigger_date arrived, ET) — due until dismissed — plus timed reminders whose ET date+time has arrived and that have not yet fired. danfeed polls this and DMs only the timed rows. |
+| `mark_reminder_fired(section, reminder_id)` | Stamp a TIMED reminder as delivered so it never re-fires. Date-only reminders have no firing step; they stay due until dismissed. |
 | `dismiss_reminder(section, reminder_id)` | Mark a reminder handled - stops appearing in `get_landscape`, kept for history. |
 | `remove_reminder(section, reminder_id)` | Permanently delete a reminder. |
 

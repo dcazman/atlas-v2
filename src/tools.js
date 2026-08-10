@@ -360,16 +360,20 @@ function registerTools(server, auth) {
     return json(db.listReminders(section, include_dismissed));
   });
 
-  // --- Timed-reminder firing (used by danfeed's reminder loop, not by chat) -------------
-  // These two power the "wake at a set time" feature: danfeed polls list_due_reminders,
-  // DMs Dan on Slack for each, then calls mark_reminder_fired so it never re-fires.
+  // --- Due-reminder surfacing + timed firing ------------------------------------------
+  // list_due_reminders returns EVERYTHING currently due: date-only reminders (passive,
+  // stay due until dismissed) plus timed ones that have not yet fired. danfeed polls it,
+  // DMs Dan for the TIMED rows only (it skips rows without a trigger_time), then calls
+  // mark_reminder_fired so a timed reminder never re-fires.
   guarded('list_due_reminders', {
-    title: 'List due timed reminders',
+    title: 'List due reminders',
     description:
-      'List TIMED reminders (those with a trigger_time) whose date+time has arrived in ' +
-      'America/New_York and that have NOT yet fired and are not dismissed. This is the ' +
-      'firing queue polled by the reminder loop that DMs Dan; after delivering one, call ' +
-      'mark_reminder_fired with its id. (Normal chat should use get_landscape / list_reminders.)',
+      'List every reminder that is currently due and not dismissed: date-only reminders ' +
+      '(no trigger_time) whose trigger_date has arrived in America/New_York - these stay ' +
+      'due until dismissed - plus TIMED reminders whose date+time has arrived and that ' +
+      'have NOT yet fired. The reminder loop that DMs Dan polls this and delivers only ' +
+      'the timed rows (then calls mark_reminder_fired); date-only rows are passive and ' +
+      'are cleared with dismiss_reminder.',
     inputSchema: {
       section: SECTION,
     },
@@ -380,10 +384,11 @@ function registerTools(server, auth) {
   guarded('mark_reminder_fired', {
     title: 'Mark reminder fired',
     description:
-      'Stamp a timed reminder as fired (delivered) so it will not fire again. Call this right ' +
-      'after successfully DMing Dan for a reminder returned by list_due_reminders. Idempotent: ' +
-      'a second call for the same id is a no-op. Does not dismiss the reminder - it still shows ' +
-      'in get_landscape until dismissed.',
+      'Stamp a TIMED reminder as fired (delivered) so it will not fire again. Call this right ' +
+      'after successfully DMing Dan for a timed reminder returned by list_due_reminders. ' +
+      'Idempotent: a second call for the same id is a no-op. Does not dismiss the reminder - it ' +
+      'still shows in get_landscape until dismissed. Not for date-only reminders: they have no ' +
+      'firing step and stay due until dismissed regardless of fired_at.',
     inputSchema: {
       section: SECTION,
       reminder_id: z.number().int().describe('The id of the reminder that was just delivered.'),

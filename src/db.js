@@ -427,8 +427,9 @@ if (db.prepare('PRAGMA user_version').get().user_version < 13) {
 // v14: reminders.trigger_time (HH:MM, section tz = America/New_York) + reminders.fired_at.
 // A reminder WITH a trigger_time is a TIMED reminder: danfeed's reminder loop fires a
 // Slack DM to Dan at/after trigger_date+trigger_time (exactly once), then stamps fired_at
-// so it never re-fires. NULL trigger_time = legacy date-only reminder (surfaces in
-// get_landscape on/after the date, no active push). Additive ALTERs, guarded; try/catch
+// so it never re-fires. NULL trigger_time = date-only reminder (passive: surfaces as due
+// in get_landscape AND list_due_reminders on/after the date and stays due until
+// dismissed - fired_at does not apply; no active push). Additive ALTERs, guarded; try/catch
 // covers fresh installs where the CREATE block already added the columns.
 if (db.prepare('PRAGMA user_version').get().user_version < 14) {
   try { db.exec('ALTER TABLE reminders ADD COLUMN trigger_time TEXT'); } catch (e) { /* already present */ }
@@ -641,8 +642,9 @@ function createReminder(section, content, triggerDate, entityName, triggerTime) 
   }
   // trigger_time is optional. When present it must be HH:MM (24h), interpreted in the
   // section timezone (America/New_York). It turns a reminder into a TIMED reminder that
-  // danfeed actively fires (Slack DM) at/after trigger_date+trigger_time. NULL = legacy
-  // date-only reminder (passive: surfaces in get_landscape on/after the date, no push).
+  // danfeed actively fires (Slack DM) at/after trigger_date+trigger_time. NULL =
+  // date-only reminder (passive: surfaces as due in get_landscape and
+  // list_due_reminders on/after the date, stays due until dismissed, no push).
   let time = null;
   if (triggerTime != null && String(triggerTime).trim() !== '') {
     const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(triggerTime).trim());
@@ -676,19 +678,27 @@ function getActiveReminders(section) {
   ).all(section);
 }
 
-// Timed reminders whose ET datetime has arrived and that have NOT yet fired (and are
-// not dismissed). This is what danfeed's reminder loop pulls each tick to DM Dan. The
-// datetime compare is done in JS against ET (SQLite date/datetime('now') is UTC).
+// Every reminder that is currently due and not dismissed, in two flavors:
+//   - date-only (trigger_time NULL): due once trigger_date arrives in ET, and it STAYS
+//     due until dismissed (fired_at is ignored - these are passive, never DM-pushed;
+//     danfeed skips rows without a trigger_time).
+//   - timed: due once its ET date+time arrives and it has NOT yet fired; danfeed DMs
+//     these and stamps fired_at so they deliver exactly once.
+// danfeed's reminder loop pulls this each tick; chat/sidebar reads it for anything due.
+// The date/datetime compares are done in JS against ET (SQLite date/datetime('now') is UTC).
 function getDueReminders(section) {
   const rows = db.prepare(
     `SELECT r.id, r.content, r.trigger_date, r.trigger_time, r.created_at, ent.name AS entity
      FROM reminders r LEFT JOIN entities ent ON ent.id = r.entity_id
-     WHERE r.section = ? AND r.dismissed_at IS NULL AND r.fired_at IS NULL
-       AND r.trigger_time IS NOT NULL
+     WHERE r.section = ? AND r.dismissed_at IS NULL
+       AND (r.trigger_time IS NULL OR r.fired_at IS NULL)
      ORDER BY r.trigger_date ASC, r.trigger_time ASC`
   ).all(section);
   const nowKey = easternNowKey();
-  return rows.filter((r) => `${r.trigger_date}T${r.trigger_time}` <= nowKey);
+  const todayEt = nowKey.slice(0, 10);
+  return rows.filter((r) => (r.trigger_time == null
+    ? r.trigger_date <= todayEt
+    : `${r.trigger_date}T${r.trigger_time}` <= nowKey));
 }
 
 // Stamp a timed reminder as fired so it never re-fires. The `fired_at IS NULL` guard
