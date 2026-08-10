@@ -444,7 +444,7 @@ ${activityStrip(activity)}
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
 </div>
 <div id="board" class="panel on">
-  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - display only. NOT the number Dan speaks in chat to move/close a piece (that's the running whole-board position Claude resolves via board_list; see ATLAS.md / SPEC-tray-and-commands.md).">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
@@ -452,7 +452,7 @@ ${activityStrip(activity)}
 <div id="reminders" class="panel">
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
 </div>
-<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). The Slot number is THIS VIEW ONLY and resets every sprint - it is NOT the number Dan uses in chat to move/close a piece (that's a different, whole-board number Claude resolves live and confirms by title; the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
+<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
 function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
 (function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders')show(t);}catch(e){}})();
@@ -461,6 +461,56 @@ setInterval(function(){location.reload();},30000);
 </body></html>`;
 }
 
+
+// Slot map for /api (corrected numbering, Aug 10): the Slot on the view IS the
+// number Dan speaks in chat, so the API must expose the exact same mapping the
+// renderer produces - same grouping, same active-sprint pick, same GSSD-no-
+// sprint default, same frozen sprint_slots, same recomputed backlog order.
+// Returns Map(row_id -> { block, slot }) where block is 'sprint <N>',
+// 'sprint <N> (active)' or 'backlog'.
+function computeSlotMap() {
+  let pieces = [];
+  try { pieces = dbMod.listBoardRows(BOARD_SECTION, true); } catch (e) { return new Map(); }
+  const live = pieces.filter((p) => p.status !== 'done');
+  const bySprint = new Map();
+  const backlogCandidates = [];
+  for (const p of live) {
+    const sp = (p.sprint || '').trim();
+    if (!sp) { backlogCandidates.push(p); continue; }
+    if (!bySprint.has(sp)) bySprint.set(sp, []);
+    bySprint.get(sp).push(p);
+  }
+  const numericSort = (a, b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return String(a).localeCompare(String(b));
+  };
+  const allSprints = [...bySprint.keys()].sort(numericSort);
+  const inSprintSprints = [...new Set(live.filter((p) => p.in_sprint && p.sprint).map((p) => p.sprint))];
+  const activeSprint = inSprintSprints.length ? inSprintSprints.slice().sort(numericSort)[0] : (allSprints[0] || '');
+  const backlog = [];
+  for (const p of backlogCandidates) {
+    if (activeSprint && hasGssdKey(p.related)) bySprint.get(activeSprint).push(p);
+    else backlog.push(p);
+  }
+  const oldestFirst = (rows) => [...rows].sort((a, b) => {
+    const ka = a.source_date || a.created_at, kb = b.source_date || b.created_at;
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return a.id - b.id;
+  });
+  const map = new Map();
+  for (const sp of allSprints) {
+    try { dbMod.ensureSprintSlots(BOARD_SECTION, sp, oldestFirst(bySprint.get(sp)).map((p) => p.id)); } catch (e) {}
+    let slots = [];
+    try { slots = dbMod.getSprintSlots(BOARD_SECTION, sp); } catch (e) {}
+    const block = 'sprint ' + sp + (sp === activeSprint ? ' (active)' : '');
+    for (const s of slots) map.set(s.row_id, { block, slot: s.slot });
+  }
+  let n = 0;
+  for (const p of oldestFirst(backlog)) map.set(p.id, { block: 'backlog', slot: ++n });
+  return map;
+}
 
 const boardApp = express();
 boardApp.get('/', (req, res) => { res.set('Content-Type', 'text/html; charset=utf-8'); res.send(renderBoard()); });
@@ -474,11 +524,12 @@ boardApp.get('/api', (req, res) => {
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { activity = dbMod.recentActivity(BOARD_SECTION, 7); } catch (e) {}
   const rel = (r) => { try { return JSON.parse(r); } catch (e) { return [r]; } };
+  const slotMap = computeSlotMap();
   res.json({
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
-    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
     // Board v-next item 4: what moved or closed recently (additive field).
     activity: activity.map((a) => ({ row_id: a.row_id, title: a.title, related: rel(a.related), kind: a.kind, sprint: a.sprint, at: a.at })),
