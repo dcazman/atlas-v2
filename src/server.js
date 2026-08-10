@@ -280,17 +280,30 @@ function renderBoard() {
     bySprint.get(sp).closed.push(p);
   }
 
-  const inSprintCounts = new Map();
-  for (const p of live) if (p.in_sprint && p.sprint) inSprintCounts.set(p.sprint, (inSprintCounts.get(p.sprint) || 0) + 1);
-  let activeSprint = '', bestCount = 0;
-  for (const [sp, c] of inSprintCounts) if (c > bestCount) { bestCount = c; activeSprint = sp; }
-
-  const otherSprints = [...bySprint.keys()].filter((sp) => sp !== activeSprint).sort((a, b) => {
+  // Active sprint = the LOWEST-numbered sprint (sprints are sequential - 16 is
+  // current, 17 is next), preferring an in_sprint=1-flagged sprint when that
+  // signal is actually populated. Two real bugs lived here (caught live by Dan
+  // Aug 10, 17 rendering above 16):
+  //  1. It picked the sprint with the MOST in_sprint=1 rows, not the lowest-
+  //     numbered one - a bad tie-breaker even when the flag is populated
+  //     (pre-planning can pull more tickets into next sprint than remain in
+  //     the winding-down current one).
+  //  2. In production in_sprint is not populated at all (0 rows), so
+  //     activeSprint fell through empty and the code rendered the "other
+  //     sprints" list DESCENDING with nothing pulled to the front - i.e.
+  //     next-sprint-first, backwards from "active on top".
+  // Fix: always sort every sprint ascending first, then pull the active one
+  // (in_sprint-flagged if any exist, else simply the lowest number) to the
+  // front - so the rest of the list stays in natural ascending order too.
+  const numericSort = (a, b) => {
     const na = parseFloat(a), nb = parseFloat(b);
-    if (!isNaN(na) && !isNaN(nb)) return nb - na;
-    return String(b).localeCompare(String(a));
-  });
-  const sprintOrder = activeSprint ? [activeSprint, ...otherSprints] : otherSprints;
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return String(a).localeCompare(String(b));
+  };
+  const allSprints = [...bySprint.keys()].sort(numericSort);
+  const inSprintSprints = [...new Set(live.filter((p) => p.in_sprint && p.sprint).map((p) => p.sprint))];
+  const activeSprint = inSprintSprints.length ? inSprintSprints.slice().sort(numericSort)[0] : (allSprints[0] || '');
+  const sprintOrder = activeSprint ? [activeSprint, ...allSprints.filter((sp) => sp !== activeSprint)] : allSprints;
 
   let body = '';
   for (const sp of sprintOrder) body += renderSprintBlock(sp, bySprint.get(sp), sp === activeSprint);
@@ -369,7 +382,7 @@ ${activityStrip(activity)}
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
 </div>
 <div id="board" class="panel on">
-  ${body ? `<table><thead><tr><th>Slot</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th>Note</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - display only. NOT the number Dan speaks in chat to move/close a piece (that's the running whole-board position Claude resolves via board_list; see ATLAS.md / SPEC-tray-and-commands.md).">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th>Note</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
@@ -377,7 +390,7 @@ ${activityStrip(activity)}
 <div id="reminders" class="panel">
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
 </div>
-<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). Auto-refreshes every 30s.</footer>
+<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). The Slot number is THIS VIEW ONLY and resets every sprint - it is NOT the number Dan uses in chat to move/close a piece (that's a different, whole-board number Claude resolves live and confirms by title; the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Auto-refreshes every 30s.</footer>
 <script>
 function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
 (function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders')show(t);}catch(e){}})();

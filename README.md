@@ -277,3 +277,60 @@ hook (both ride the danfeed upgrade — Atlas side is ready via `pending_add` + 
 session anchor. Until the auto-feed lands, the board is reconcile-on-demand, not self-updating.
 
 *Board built by the c-atlas conductor thread, 2026-07-27/28.*
+
+---
+
+# Board v-next — SHIPPED (2026-08-10)
+
+Design of record: Atlas work obs **979** (build list), **980** (frozen sprint
+numbering), **984** (access model). Built + deployed by the c-board worker
+thread. All five items are live in `src/server.js` + `src/db.js`:
+
+1. **Sprint-grouped reorder.** The read-only view groups live pieces into a
+   block per sprint (active sprint first, oldest-first within each), plus a
+   Backlog block for pieces with no sprint. On Hold pieces stay **inside**
+   their sprint block, greyed — no longer exiled to the bottom of the whole
+   board. "Active sprint" = the lowest-numbered sprint (sprints are
+   sequential; `in_sprint=1` is preferred as a signal when danfeed actually
+   populates it, but as of this writing it does not, so the lowest-number
+   fallback is what's really running in prod).
+2. **Reminders tab** — shipped 2026-07-31 (unchanged by this pass).
+3. **Pin decoupled from status.** `bumpBoardRow`/`moveBoardRow` only ever
+   write `priority`. Fixed a real bug: `moveBoardRow` used to silently un-hold
+   a held piece to To Do just because it got pinned/reordered — that's the
+   ghost-ticket trap Dan flagged (Jira says "working it" when he only
+   reordered). A held piece can now be pinned and will render on-hold
+   (greyed) at its new slot.
+4. **Activity strip.** A slim strip above the tabs, last 7 days: status
+   changes (closed/started/held/back-to-todo) and cross-sprint moves. Backed
+   by `db.recentActivity()`; no new table, derived from `board_rows` +
+   `sprint_slots`.
+5. **Frozen per-sprint numbering.** New `sprint_slots` table (migration v15):
+   a slot is assigned once per `(section, sprint, row)`, oldest-first, the
+   first time that sprint is rendered, and never recomputed — only appended
+   to. A row keeps its slot through in_progress/on_hold; closing crosses it
+   out in place (free history); leaving the sprint leaves a dim "→ S17"
+   ghost at the old slot while the row earns a fresh slot in its new sprint.
+
+Also done earlier and untouched by this pass: the PCT-15634 duplicate board
+row dedupe (obs 979's "also").
+
+## Three different numbers — READ THIS BEFORE POINTING AT A ROW
+
+Board v-next added a second numbering scheme to a system that already had one,
+and that is exactly the kind of confusion Dan does not want. There are
+**three** distinct numbers in play; they are never interchangeable:
+
+| # | What it is | Where it appears | Who/what uses it |
+|---|---|---|---|
+| **the plate** (`board_rows.id`) | The true immutable database primary key. | **Nowhere Dan-facing.** Internal only — the `row_id` param every `board_*` MCP tool takes under the hood. | Tools/danfeed, so the right row is always hit. |
+| **the chat/agenda position** | A running 1..N count down the WHOLE board (oldest-first, bump/hold order — `listBoardRows`'s own SQL order), recomputed fresh every time. | Printed by the `/agenda` skill as `#row`; this is the number **Dan speaks** ("move 21 to 3"). | Claude resolves it to the true plate id via a fresh `board_list` lookup, then **confirms by title** before calling any tool (SPEC-tray-and-commands.md: "positions are not perfectly stable... a moved number never burns Dan" — the title-confirm is the safety net, not the number itself). |
+| **the view's sprint slot** (new, this pass) | A number **1..N within one sprint's block only**, frozen at first render, append-only, resets to 1 for every sprint. | The **"Slot"** column on the read-only web view (`http://192.168.50.23:7795/`) only. | Nothing else. It is not read by `/agenda`, not read by `board-ops`, not passed to any tool. Display-only, for a human glancing at the page without a Claude session. |
+
+**The one identifier that is the same in all three places is the ticket key**
+(`PCT-XXXX` / `GSSD-XXXX`) — when in doubt, or when relaying a row between
+the web view and chat, use the key, not a number. The web view's Slot column
+now carries a `title` tooltip and the page footer says this explicitly, so
+the distinction is visible at the point of use, not just in this doc.
+
+*Board v-next shipped by the c-board worker thread, 2026-08-10.*

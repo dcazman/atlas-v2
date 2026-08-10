@@ -471,3 +471,21 @@ remember — because a list kept by memory is exactly the list you can't trust.
 - **Remaining:** danfeed→pending auto-feed and auto-drift-injection in the boot hook (both ride
   Dan's danfeed upgrade — Atlas side is ready via `pending_add` + `board_reconcile`); Phase 3
   session anchor. Until the auto-feed lands, the board is reconcile-on-demand, not self-updating.
+
+## Board v-next — SHIPPED (obs 979/980/984, built 2026-08-10 by c-board)
+
+All five build-list items are live: sprint-grouped reorder (active sprint block
+first, oldest-first within it, On Hold greyed but staying **inside** its own
+sprint block instead of sinking to the bottom of the whole board), the
+Reminders tab (shipped 2026-07-31), pin decoupled from status (fixed a real
+bug where pinning/moving a held piece silently un-held it to To Do — removed;
+`priority` and `status` are now fully independent columns in practice, not
+just in the schema), an activity strip (last 7 days of status changes + moves,
+above the tabs), and frozen per-sprint numbering (new `sprint_slots` table,
+migration v15 — a slot is assigned once oldest-first and only ever appended
+to, never recomputed; closed rows cross out in place, rows that leave a sprint
+leave a "→ S17" ghost). PCT-15634 dedupe was done earlier. **Full writeup +
+the row-numbering table are in README.md's "Board v-next" section — read that
+before referencing a row by number, there are three different numbers and
+they are not interchangeable** (the internal plate id, the chat/agenda
+running position Dan actually speaks, and this pass's per-sprint view slot).
