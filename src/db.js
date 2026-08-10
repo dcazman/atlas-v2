@@ -436,6 +436,32 @@ if (db.prepare('PRAGMA user_version').get().user_version < 14) {
   db.exec('PRAGMA user_version = 14');
 }
 
+// v15: sprint_slots - FROZEN PER-SPRINT NUMBERING (Board v-next item 5, Atlas
+// work obs 980). A slot number is assigned once per (section, sprint, row) the
+// first time that sprint is rendered, oldest-first, and held for the sprint's
+// whole life - the view must never recompute 1..N live (that is the drift bug
+// this replaces). New tickets appended mid-sprint get the next slot; a ticket
+// that leaves the sprint keeps its old slot as a "moved" marker (view-layer)
+// while earning a fresh slot in its new sprint. Numbering resets per sprint
+// because this table is keyed by sprint, not globally. board_rows itself is
+// untouched - this is a pure additive ledger table.
+if (db.prepare('PRAGMA user_version').get().user_version < 15) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sprint_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL,
+      sprint TEXT NOT NULL,
+      row_id INTEGER NOT NULL REFERENCES board_rows(id),
+      slot INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(section, sprint, row_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sprint_slots_section_sprint ON sprint_slots(section, sprint);
+    CREATE INDEX IF NOT EXISTS idx_sprint_slots_row ON sprint_slots(row_id);
+  `);
+  db.exec('PRAGMA user_version = 15');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -836,11 +862,12 @@ function moveBoardRow(section, id, position) {
   if (isNaN(pos) || pos < 1) pos = 1;
   const idx = Math.min(pos - 1, pinned.length);
   pinned.splice(idx, 0, id);
-  // moving a piece brings it onto the ranked board: if it was On Hold, un-hold it
-  // to To Do (clearing the hold reason) so it can sit up top like a normal piece.
-  if (row.status === 'on_hold') {
-    db.prepare("UPDATE board_rows SET status = 'todo', waiting_on = NULL WHERE id = ? AND section = ?").run(id, section);
-  }
+  // Pin/reorder is visual attention ordering ONLY (Board v-next item 3, Atlas
+  // work obs 979/984) - it must NEVER auto-transition status. This used to
+  // un-hold a held piece to To Do just because it got moved, which is exactly
+  // the ghost-ticket trap Dan flagged (Jira says "working it" when he only
+  // reordered). Status is untouched here; a held piece can be pinned/reordered
+  // and will render on-hold (greyed) in its new slot, same as before the move.
   const stmt = db.prepare('UPDATE board_rows SET priority = ? WHERE id = ? AND section = ?');
   pinned.forEach((rid, i) => stmt.run(i + 1, rid, section));
   return { ok: true, row_id: id, position: idx + 1, pinned_order: pinned };
@@ -907,6 +934,77 @@ function reopenPending(section, id) {
   return { ok: true, pending_id: id, state: 'pending' };
 }
 
+// ---------------------------------------------------------------------------
+// sprint_slots helpers (Board v-next item 5, obs 980). View-layer only - these
+// never touch board_rows.status, so they cannot violate item 3's decoupling.
+// ---------------------------------------------------------------------------
+
+// Assign slots for any row in `orderedRowIds` that does not already have one
+// in this (section, sprint). Existing slots are never reassigned or reordered
+// - this is the "snapshot at sprint start + append-only" persistence obs 980
+// requires. Pass candidates already sorted oldest-first on first call for a
+// sprint so the initial snapshot lands in the right order.
+function ensureSprintSlots(section, sprint, orderedRowIds) {
+  const existing = db.prepare(
+    'SELECT row_id, slot FROM sprint_slots WHERE section = ? AND sprint = ?'
+  ).all(section, sprint);
+  const known = new Set(existing.map((r) => r.row_id));
+  let maxSlot = existing.reduce((m, r) => Math.max(m, r.slot), 0);
+  const insert = db.prepare('INSERT INTO sprint_slots (section, sprint, row_id, slot) VALUES (?, ?, ?, ?)');
+  for (const rowId of orderedRowIds) {
+    if (known.has(rowId)) continue;
+    maxSlot += 1;
+    insert.run(section, sprint, rowId, maxSlot);
+    known.add(rowId);
+  }
+}
+
+function getSprintSlots(section, sprint) {
+  return db.prepare(
+    'SELECT row_id, slot, created_at FROM sprint_slots WHERE section = ? AND sprint = ? ORDER BY slot ASC'
+  ).all(section, sprint);
+}
+
+// Every sprint a row has ever held a slot in (oldest first) - lets the view
+// tell "brand new ticket" (one sprint, ever) from "moved sprints" (more than
+// one), for the -> S17 ghost marker and the activity strip.
+function getSlotHistoryForRow(section, rowId) {
+  return db.prepare(
+    'SELECT sprint, slot, created_at FROM sprint_slots WHERE section = ? AND row_id = ? ORDER BY created_at ASC'
+  ).all(section, rowId);
+}
+
+function listSlottedSprints(section) {
+  return db.prepare('SELECT DISTINCT sprint FROM sprint_slots WHERE section = ?').all(section).map((r) => r.sprint);
+}
+
+// Activity strip feed (Board v-next item 4): what moved or closed in the last
+// `days` days - status changes plus cross-sprint moves. Read-only, view-layer
+// only; changes nothing.
+function recentActivity(section, days) {
+  const cutoff = `-${Math.max(1, days || 7)} days`;
+  const statusChanges = db.prepare(
+    `SELECT id AS row_id, title, related, status, sprint, status_changed_at AS at
+     FROM board_rows WHERE section = ? AND on_board = 1 AND status_changed_at >= datetime('now', ?)
+     ORDER BY status_changed_at DESC LIMIT 30`
+  ).all(section, cutoff).map((r) => ({
+    ...r,
+    kind: r.status === 'done' ? 'closed' : r.status === 'in_progress' ? 'started' : r.status === 'on_hold' ? 'held' : 'reopened',
+  }));
+
+  const slotMoves = db.prepare(
+    `SELECT ss.row_id, ss.sprint, ss.created_at AS at, b.title, b.related
+     FROM sprint_slots ss JOIN board_rows b ON b.id = ss.row_id
+     WHERE ss.section = ? AND ss.created_at >= datetime('now', ?)
+       AND (SELECT COUNT(*) FROM sprint_slots ss2 WHERE ss2.section = ss.section AND ss2.row_id = ss.row_id) > 1
+     ORDER BY ss.created_at DESC LIMIT 30`
+  ).all(section, cutoff).map((r) => ({ ...r, kind: 'moved' }));
+
+  return [...statusChanges, ...slotMoves]
+    .sort((a, b) => (a.at < b.at ? 1 : (a.at > b.at ? -1 : 0)))
+    .slice(0, 15);
+}
+
 module.exports = {
   getLandscape,
   getEntity,
@@ -945,4 +1043,9 @@ module.exports = {
   getPending,
   resolvePending,
   reopenPending,
+  ensureSprintSlots,
+  getSprintSlots,
+  getSlotHistoryForRow,
+  listSlottedSprints,
+  recentActivity,
 };

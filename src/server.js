@@ -159,40 +159,150 @@ function boardStamp() {
     hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short',
   }).format(new Date());
 }
-function renderBoard() {
-  let pieces = [], pending = [];
-  try { pieces = dbMod.listBoardRows(BOARD_SECTION, false); } catch (e) { /* render empty on error */ }
-  try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
-  let reminders = [];
-  try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
-  const badge = (s) => `<span class="b b-${esc(s)}">${esc(String(s).replace(/_/g, ' '))}</span>`;
-  const isPinned = (p) => p.priority !== null && p.priority !== undefined;
-  const working = pieces.filter((p) => isPinned(p));
-  const sprint  = pieces.filter((p) => !isPinned(p) && p.in_sprint);
-  const rest    = pieces.filter((p) => !isPinned(p) && !p.in_sprint);
-  const sprintNo = sprint.length ? (sprint[0].sprint || '') : '';
-  let _n = 0;
-  const row = (p, zr) => {
-    _n += 1;
+function boardBadge(s) {
+  return `<span class="b b-${esc(s)}">${esc(String(s).replace(/_/g, ' '))}</span>`;
+}
+
+function slotRow(slot, p, isClosed) {
+  let rel = [];
+  try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
+  const pinned = p.priority !== null && p.priority !== undefined;
+  const numGrey = isClosed || pinned || p.status === 'in_progress';
+  const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim());
+  const rowCls = [
+    p.status === 'on_hold' ? 'hold' : '',
+    isClosed ? 'closed' : '',
+    pinned ? 'pinned' : '',
+  ].filter(Boolean).join(' ');
+  const pin = pinned ? '<span class="pin" title="pinned - attention only, never changes status">\u{1F4CC}</span> ' : '';
+  return `<tr class="${rowCls}"><td class="pos${numGrey ? ' num-grey' : ''}">${esc(slot)}</td><td>${pin}${esc(p.title)}</td><td>${boardBadge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
+    + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
+    + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
+}
+
+function ghostRow(slot, rowId) {
+  let dest = 'moved on';
+  try {
+    const cur = dbMod.getBoardRow(BOARD_SECTION, rowId);
+    if (!cur) dest = 'removed';
+    else if (!cur.on_board) dest = 'off-board';
+    else if (cur.sprint) dest = '→ S' + esc(cur.sprint);
+    else dest = '→ backlog';
+  } catch (e) { /* leave default */ }
+  return `<tr class="ghost"><td class="pos num-grey">${esc(slot)}</td><td colspan="6" class="ghost-txt">${dest}</td></tr>`;
+}
+
+// Sprint-grouped block with FROZEN per-sprint numbering (Board v-next items 1 +
+// 5, Atlas work obs 979/980). Slots are assigned once, oldest-first, the first
+// time a sprint is rendered (ensureSprintSlots is a no-op once they exist), then
+// only ever appended to - never recomputed. A row keeps its slot through
+// in_progress/on_hold/done; a row that left this sprint renders as a ghost in
+// place instead of vanishing or shifting everything below it up.
+function renderSprintBlock(sprintLabel, group, isActive) {
+  const liveRows = group.live;
+  const oldestFirst = [...liveRows].sort((a, b) => {
+    const ka = a.source_date || a.created_at, kb = b.source_date || b.created_at;
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return a.id - b.id;
+  });
+  try { dbMod.ensureSprintSlots(BOARD_SECTION, sprintLabel, oldestFirst.map((p) => p.id)); } catch (e) { /* render best-effort */ }
+  let slots = [];
+  try { slots = dbMod.getSprintSlots(BOARD_SECTION, sprintLabel); } catch (e) {}
+  const liveById = new Map(liveRows.map((p) => [p.id, p]));
+  const closedById = new Map(group.closed.map((p) => [p.id, p]));
+  let rowsHtml = '';
+  for (const s of slots) {
+    const p = liveById.get(s.row_id);
+    if (p) { rowsHtml += slotRow(s.slot, p, false); continue; }
+    const c = closedById.get(s.row_id);
+    if (c) { rowsHtml += slotRow(s.slot, c, true); continue; }
+    rowsHtml += ghostRow(s.slot, s.row_id);
+  }
+  const hdrLabel = 'SPRINT ' + esc(sprintLabel) + (isActive ? ' · ACTIVE' : '');
+  return `<tr class="zonehdr ${isActive ? 'zh-active' : 'zh-sprint'}"><td colspan="7">${hdrLabel}</td></tr>` + rowsHtml;
+}
+
+// No-sprint backlog: plain oldest-first, recomputed each render (frozen
+// numbering is a per-sprint concept per obs 980 - backlog has no sprint).
+function renderBacklogBlock(rows) {
+  const ordered = [...rows].sort((a, b) => {
+    const ka = a.source_date || a.created_at, kb = b.source_date || b.created_at;
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return a.id - b.id;
+  });
+  let n = 0;
+  const rowsHtml = ordered.map((p) => slotRow(++n, p, false)).join('');
+  return `<tr class="zonehdr zh-backlog"><td colspan="7">BACKLOG · NO SPRINT</td></tr>` + rowsHtml;
+}
+
+// Activity strip (Board v-next item 4): what moved or closed recently, so
+// coming back to the board doesn't require re-deriving state from scratch.
+function activityStrip(activity) {
+  if (!activity || !activity.length) return '<div class="activity empty-act">Nothing moved recently.</div>';
+  const items = activity.map((a) => {
     let rel = [];
-    try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
-    const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim());
-    const cls = zr + (p.status === 'on_hold' ? ' hold' : '');
-    return `<tr class="${cls}"><td class="pos">${_n}</td><td>${esc(p.title)}</td><td>${badge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
-      + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
-      + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
-  };
-  const hdr = (label, zh) => `<tr class="zonehdr ${zh}"><td colspan="7">${esc(label)}</td></tr>`;
+    try { rel = JSON.parse(a.related); } catch (e) { rel = [a.related]; }
+    const key = rel[0] || ('#' + a.row_id);
+    const verb = a.kind === 'closed' ? 'closed'
+      : a.kind === 'started' ? 'started'
+      : a.kind === 'held' ? 'on hold'
+      : a.kind === 'moved' ? ('→ S' + esc(a.sprint || ''))
+      : 'back to todo';
+    return `<span class="act-item"><b>${esc(key)}</b> ${esc(verb)}</span>`;
+  }).join('<span class="act-sep">·</span>');
+  return `<div class="activity"><span class="activity-label">RECENT</span> ${items}</div>`;
+}
+
+function renderBoard() {
+  let pieces = [], pending = [], reminders = [], activity = [];
+  try { pieces = dbMod.listBoardRows(BOARD_SECTION, true); } catch (e) { /* render empty on error */ }
+  try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
+  try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
+  try { activity = dbMod.recentActivity(BOARD_SECTION, 7); } catch (e) {}
+
+  const live = pieces.filter((p) => p.status !== 'done');
+  const closed = pieces.filter((p) => p.status === 'done');
+
+  // ---- sprint grouping (item 1) + frozen numbering (item 5) ----------------
+  const bySprint = new Map();
+  const backlog = [];
+  for (const p of live) {
+    const sp = (p.sprint || '').trim();
+    if (!sp) { backlog.push(p); continue; }
+    if (!bySprint.has(sp)) bySprint.set(sp, { live: [], closed: [] });
+    bySprint.get(sp).live.push(p);
+  }
+  for (const p of closed) {
+    const sp = (p.sprint || '').trim();
+    if (!sp || !bySprint.has(sp)) continue; // sprint fully wound down - history ages out with it
+    bySprint.get(sp).closed.push(p);
+  }
+
+  const inSprintCounts = new Map();
+  for (const p of live) if (p.in_sprint && p.sprint) inSprintCounts.set(p.sprint, (inSprintCounts.get(p.sprint) || 0) + 1);
+  let activeSprint = '', bestCount = 0;
+  for (const [sp, c] of inSprintCounts) if (c > bestCount) { bestCount = c; activeSprint = sp; }
+
+  const otherSprints = [...bySprint.keys()].filter((sp) => sp !== activeSprint).sort((a, b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return nb - na;
+    return String(b).localeCompare(String(a));
+  });
+  const sprintOrder = activeSprint ? [activeSprint, ...otherSprints] : otherSprints;
+
   let body = '';
-  if (working.length) body += hdr('WORKING ON', 'zh-work') + working.map((p) => row(p, 'zr-work')).join('');
-  if (sprint.length)  body += hdr('CURRENT SPRINT' + (sprintNo ? ' · ' + sprintNo : ''), 'zh-sprint') + sprint.map((p) => row(p, 'zr-sprint')).join('');
-  if (rest.length)    body += hdr('EVERYTHING ELSE', 'zh-rest') + rest.map((p) => row(p, 'zr-rest')).join('');
+  for (const sp of sprintOrder) body += renderSprintBlock(sp, bySprint.get(sp), sp === activeSprint);
+  if (backlog.length) body += renderBacklogBlock(backlog);
+
   const pendRows = pending.map((p, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
   ).join('');
   const remRows = reminders.map((r, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${r.id}</td><td>${esc(r.content)}</td><td class="sp">${esc(r.trigger_date || '')}${r.trigger_time ? ' ' + esc(r.trigger_time) : ''}</td><td class="src">${esc(r.entity || '')}</td><td class="age">${boardDaysSince(r.created_at)}</td></tr>`
   ).join('');
+
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atlas</title>
@@ -204,6 +314,11 @@ function renderBoard() {
   .logo{display:inline-flex;align-items:center}
   .logo svg{width:30px;height:30px}
   .meta{color:#8b94a3;font-size:12px}
+  .activity{padding:8px 18px;font-size:12px;color:#cfd6e2;border-bottom:1px solid #2a2f3a;background:#141822;white-space:nowrap;overflow-x:auto}
+  .activity.empty-act{color:#5b6472;font-style:italic}
+  .activity-label{color:#6b7280;letter-spacing:.08em;font-size:10px;margin-right:10px}
+  .act-item b{color:#e0b24a;font-weight:600}
+  .act-sep{color:#3a4150;margin:0 8px}
   .tabs{display:flex;gap:6px;padding:12px 18px 0}
   .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
   .tabs button.on{background:#232a36;color:#fff}
@@ -214,17 +329,20 @@ function renderBoard() {
   th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;background:#0f1115;z-index:5;box-shadow:inset 0 -1px 0 #222833}
   td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
   td.pos{color:#4b5563;font-variant-numeric:tabular-nums;width:30px}
+  td.pos.num-grey{color:#3a4150}
   td.sp{color:#9fb0c3;font-variant-numeric:tabular-nums;width:54px;text-align:center}
   td.note-flag{color:#e0a04a;font-style:italic}
   tr.zonehdr td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;padding:16px 10px 6px;border-bottom:2px solid #313846;background:#0f1115}
-  tr.zh-work td{color:#7ab3ff}
+  tr.zh-active td{color:#7ab3ff}
   tr.zh-sprint td{color:#86efac}
-  tr.zh-rest td{color:#fde68a}
-  tr.zr-work td{background:rgba(59,130,246,0.09)}
-  tr.zr-sprint td{background:rgba(34,197,94,0.08)}
-  tr.zr-rest td{background:rgba(234,179,8,0.05)}
+  tr.zh-backlog td{color:#fde68a}
+  tr.pinned td{box-shadow:inset 3px 0 0 #e0b24a}
+  .pin{filter:grayscale(.15)}
   tr.hold td{opacity:.5}
   tr.hold td.id{border-left:2px solid #4a3a12}
+  tr.closed td{text-decoration:line-through;opacity:.45}
+  tr.ghost td{opacity:.35;font-style:italic}
+  td.ghost-txt{color:#8b94a3}
   td.age{color:#8b94a3;font-variant-numeric:tabular-nums;width:52px}
   td.tk{color:#7aa2f7;font-family:ui-monospace,monospace;font-size:12px;line-height:1.7}
   td.tk a{color:#7aa2f7;text-decoration:none}
@@ -242,15 +360,16 @@ function renderBoard() {
   <span class="logo">${ATLAS_SVG}</span>
   <h1>ATLAS</h1>
   <span class="meta">as of ${esc(boardStamp())}</span>
-  <span class="meta">${pieces.length} live pieces &middot; ${pending.length} pending</span>
+  <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
+${activityStrip(activity)}
 <div class="tabs">
-  <button id="tb" class="on" onclick="show('board')">Board (${pieces.length})</button>
+  <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
 </div>
 <div id="board" class="panel on">
-  ${pieces.length ? `<table><thead><tr><th>Pos</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th>Note</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${body ? `<table><thead><tr><th>Slot</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th>Note</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
@@ -258,7 +377,7 @@ function renderBoard() {
 <div id="reminders" class="panel">
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
 </div>
-<footer>Read-only. Oldest first. Live pieces + untriaged pending only &mdash; the store keeps everything else. Auto-refreshes every 30s.</footer>
+<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). Auto-refreshes every 30s.</footer>
 <script>
 function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
 (function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders')show(t);}catch(e){}})();
@@ -267,6 +386,7 @@ setInterval(function(){location.reload();},30000);
 </body></html>`;
 }
 
+
 const boardApp = express();
 boardApp.get('/', (req, res) => { res.set('Content-Type', 'text/html; charset=utf-8'); res.send(renderBoard()); });
 boardApp.get('/health', (req, res) => res.json({ ok: true, service: 'atlas-board', section: BOARD_SECTION, port: BOARD_PORT }));
@@ -274,16 +394,19 @@ boardApp.get('/health', (req, res) => res.json({ ok: true, service: 'atlas-board
 // JSON feed of the board — what the SessionStart hook curls to inject the live
 // board into Claude's context deterministically at every chat start. LAN, no auth.
 boardApp.get('/api', (req, res) => {
-  let pieces = [], pending = [];
+  let pieces = [], pending = [], activity = [];
   try { pieces = dbMod.listBoardRows(BOARD_SECTION, false); } catch (e) {}
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
+  try { activity = dbMod.recentActivity(BOARD_SECTION, 7); } catch (e) {}
   const rel = (r) => { try { return JSON.parse(r); } catch (e) { return [r]; } };
   res.json({
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
-    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, pinned: p.priority !== null && p.priority !== undefined, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
+    // Board v-next item 4: what moved or closed recently (additive field).
+    activity: activity.map((a) => ({ row_id: a.row_id, title: a.title, related: rel(a.related), kind: a.kind, sprint: a.sprint, at: a.at })),
   });
 });
 boardApp.listen(BOARD_PORT, () => console.log('board view (read-only) on port ' + BOARD_PORT + ' section=' + BOARD_SECTION));
