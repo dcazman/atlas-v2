@@ -486,9 +486,11 @@ migration v15 — a slot is assigned once oldest-first and only ever appended
 to, never recomputed; closed rows cross out in place, rows that leave a sprint
 leave a "→ S17" ghost). PCT-15634 dedupe was done earlier. **Full writeup +
 the row-numbering table are in README.md's "Board v-next" section — read that
-before referencing a row by number, there are three different numbers and
-they are not interchangeable** (the internal plate id, the chat/agenda
-running position Dan actually speaks, and this pass's per-sprint view slot).
+before referencing a row by number.** Corrected 2026-08-10 after a wrong-pin
+incident: the number Dan speaks IS the view's frozen per-sprint Slot (active
+sprint block by default; `/api` now exposes `slot` + `block` per piece) — the
+old "chat/agenda running position" is dead as a spoken number; the internal
+plate id stays tool-only.
 
 Same day, a second spec item landed (obs 1086, after a real incident):
 `waiting_on`/**Note** is Claude's own musing, never assumed to mirror the

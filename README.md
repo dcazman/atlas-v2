@@ -315,23 +315,24 @@ thread. All five items are live in `src/server.js` + `src/db.js`:
 Also done earlier and untouched by this pass: the PCT-15634 duplicate board
 row dedupe (obs 979's "also").
 
-## Three different numbers — READ THIS BEFORE POINTING AT A ROW
+## Two numbers — the one Dan speaks is the SLOT (corrected 2026-08-10)
 
-Board v-next added a second numbering scheme to a system that already had one,
-and that is exactly the kind of confusion Dan does not want. There are
-**three** distinct numbers in play; they are never interchangeable:
+The original v-next writeup here described THREE numbers, with the "chat/agenda
+running position" (whole-board 1..N recomputed each render) as the number Dan
+speaks. **That was wrong in practice and caused a real incident on Aug 10**:
+Dan said "pin 2" reading his screen (Sprint 16 Slot 2 = PCT-15853) and Claude
+resolved it through the running order to a 1266-day-old backlog ticket
+(PCT-9405), wrongly transitioning it in Jira. The running position is DEAD as
+a spoken number. What remains:
 
 | # | What it is | Where it appears | Who/what uses it |
 |---|---|---|---|
 | **the plate** (`board_rows.id`) | The true immutable database primary key. | **Nowhere Dan-facing.** Internal only — the `row_id` param every `board_*` MCP tool takes under the hood. | Tools/danfeed, so the right row is always hit. |
-| **the chat/agenda position** | A running 1..N count down the WHOLE board (oldest-first, bump/hold order — `listBoardRows`'s own SQL order), recomputed fresh every time. | Printed by the `/agenda` skill as `#row`; this is the number **Dan speaks** ("move 21 to 3"). | Claude resolves it to the true plate id via a fresh `board_list` lookup, then **confirms by title** before calling any tool (SPEC-tray-and-commands.md: "positions are not perfectly stable... a moved number never burns Dan" — the title-confirm is the safety net, not the number itself). |
-| **the view's sprint slot** (new, this pass) | A number **1..N within one sprint's block only**, frozen at first render, append-only, resets to 1 for every sprint. | The **"Slot"** column on the read-only web view (`http://192.168.50.23:7795/`) only. | Nothing else. It is not read by `/agenda`, not read by `board-ops`, not passed to any tool. Display-only, for a human glancing at the page without a Claude session. |
+| **the Slot** | 1..N within one sprint's block, frozen at first render, append-only, resets only on a new sprint (backlog block: recomputed oldest-first). | The **"Slot"** column on the web view (`http://192.168.50.23:7795/`), the same numbers printed by `/agenda` (grouped by block), and per-piece `slot` + `block` fields in `/api`. | **This IS the number Dan speaks.** A bare number = the active sprint's slot; other blocks by name ("sprint 17 slot 3", "backlog 2"). Claude resolves via `/api` (same grouping/frozen-slot code as the renderer) and **confirms by title** before calling any tool. |
 
-**The one identifier that is the same in all three places is the ticket key**
-(`PCT-XXXX` / `GSSD-XXXX`) — when in doubt, or when relaying a row between
-the web view and chat, use the key, not a number. The web view's Slot column
-now carries a `title` tooltip and the page footer says this explicitly, so
-the distinction is visible at the point of use, not just in this doc.
+**The ticket key** (`PCT-XXXX` / `GSSD-XXXX`) remains the one identifier that
+is the same everywhere — when in doubt, use the key. The view's Slot tooltip
+and page footer state the corrected semantics at the point of use.
 
 ## Note vs Last Comment - two different things on purpose (obs 1086)
 
