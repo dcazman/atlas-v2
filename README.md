@@ -333,4 +333,25 @@ the web view and chat, use the key, not a number. The web view's Slot column
 now carries a `title` tooltip and the page footer says this explicitly, so
 the distinction is visible at the point of use, not just in this doc.
 
+## Note vs Last Comment - two different things on purpose (obs 1086)
+
+Added same day, after a real incident: PCT-16053's own Jira description
+named the wrong person for a sign-off (mixed up two people sharing a first
+name), and the board's waiting_on note just carried that forward with no
+way to tell it had gone stale.
+
+- **Note** (column waiting_on) is, and always was, Claude's own internal
+  musing/context - never assumed to mirror the real ticket. Re-check Jira
+  before repeating an existing note forward; don't just carry it.
+- **Last Comment** (new column last_comment, migration v16) is meant to
+  show the actual live Jira comment, so ticket-side truth and Claude's own
+  note sit side by side and are visibly two different things.
+- **This pass only added the column** (schema + board_update param + view
+  display, currently blank for every row). It does NOT add any
+  Jira-fetching code to atlas-v2 - this service deliberately has no Jira
+  credential. Populating last_comment live is an open follow-up for
+  whoever next touches danfeed (it already polls Jira for status /
+  sprint / in_sprint the same way); polling-vs-on-demand and rate-limit
+  handling are that follow-up's call to make, not decided here.
+
 *Board v-next shipped by the c-board worker thread, 2026-08-10.*

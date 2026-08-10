@@ -177,7 +177,8 @@ function slotRow(slot, p, isClosed) {
   const pin = pinned ? '<span class="pin" title="pinned - attention only, never changes status">\u{1F4CC}</span> ' : '';
   return `<tr class="${rowCls}"><td class="pos${numGrey ? ' num-grey' : ''}">${esc(slot)}</td><td>${pin}${esc(p.title)}</td><td>${boardBadge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
     + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
-    + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
+    + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td>`
+    + `<td class="last-comment">${p.last_comment ? esc(p.last_comment) : '<span class=\"muted\">—</span>'}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
 }
 
 function ghostRow(slot, rowId) {
@@ -189,7 +190,7 @@ function ghostRow(slot, rowId) {
     else if (cur.sprint) dest = '→ S' + esc(cur.sprint);
     else dest = '→ backlog';
   } catch (e) { /* leave default */ }
-  return `<tr class="ghost"><td class="pos num-grey">${esc(slot)}</td><td colspan="6" class="ghost-txt">${dest}</td></tr>`;
+  return `<tr class="ghost"><td class="pos num-grey">${esc(slot)}</td><td colspan="7" class="ghost-txt">${dest}</td></tr>`;
 }
 
 // Sprint-grouped block with FROZEN per-sprint numbering (Board v-next items 1 +
@@ -220,7 +221,7 @@ function renderSprintBlock(sprintLabel, group, isActive) {
     rowsHtml += ghostRow(s.slot, s.row_id);
   }
   const hdrLabel = 'SPRINT ' + esc(sprintLabel) + (isActive ? ' · ACTIVE' : '');
-  return `<tr class="zonehdr ${isActive ? 'zh-active' : 'zh-sprint'}"><td colspan="7">${hdrLabel}</td></tr>` + rowsHtml;
+  return `<tr class="zonehdr ${isActive ? 'zh-active' : 'zh-sprint'}"><td colspan="8">${hdrLabel}</td></tr>` + rowsHtml;
 }
 
 // No-sprint backlog: plain oldest-first, recomputed each render (frozen
@@ -234,7 +235,7 @@ function renderBacklogBlock(rows) {
   });
   let n = 0;
   const rowsHtml = ordered.map((p) => slotRow(++n, p, false)).join('');
-  return `<tr class="zonehdr zh-backlog"><td colspan="7">BACKLOG · NO SPRINT</td></tr>` + rowsHtml;
+  return `<tr class="zonehdr zh-backlog"><td colspan="8">BACKLOG · NO SPRINT</td></tr>` + rowsHtml;
 }
 
 // Activity strip (Board v-next item 4): what moved or closed recently, so
@@ -345,6 +346,8 @@ function renderBoard() {
   td.pos.num-grey{color:#3a4150}
   td.sp{color:#9fb0c3;font-variant-numeric:tabular-nums;width:54px;text-align:center}
   td.note-flag{color:#e0a04a;font-style:italic}
+  td.last-comment{color:#cfd6e2;font-size:12px;max-width:260px}
+  td.last-comment .muted{color:#4b5563}
   tr.zonehdr td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;padding:16px 10px 6px;border-bottom:2px solid #313846;background:#0f1115}
   tr.zh-active td{color:#7ab3ff}
   tr.zh-sprint td{color:#86efac}
@@ -382,7 +385,7 @@ ${activityStrip(activity)}
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
 </div>
 <div id="board" class="panel on">
-  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - display only. NOT the number Dan speaks in chat to move/close a piece (that's the running whole-board position Claude resolves via board_list; see ATLAS.md / SPEC-tray-and-commands.md).">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th>Note</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - display only. NOT the number Dan speaks in chat to move/close a piece (that's the running whole-board position Claude resolves via board_list; see ATLAS.md / SPEC-tray-and-commands.md).">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
@@ -390,7 +393,7 @@ ${activityStrip(activity)}
 <div id="reminders" class="panel">
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
 </div>
-<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). The Slot number is THIS VIEW ONLY and resets every sprint - it is NOT the number Dan uses in chat to move/close a piece (that's a different, whole-board number Claude resolves live and confirms by title; the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Auto-refreshes every 30s.</footer>
+<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). The Slot number is THIS VIEW ONLY and resets every sprint - it is NOT the number Dan uses in chat to move/close a piece (that's a different, whole-board number Claude resolves live and confirms by title; the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
 function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
 (function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders')show(t);}catch(e){}})();
@@ -416,7 +419,7 @@ boardApp.get('/api', (req, res) => {
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
-    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, pinned: p.priority !== null && p.priority !== undefined, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
     // Board v-next item 4: what moved or closed recently (additive field).
     activity: activity.map((a) => ({ row_id: a.row_id, title: a.title, related: rel(a.related), kind: a.kind, sprint: a.sprint, at: a.at })),

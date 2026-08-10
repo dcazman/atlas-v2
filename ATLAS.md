@@ -489,3 +489,12 @@ the row-numbering table are in README.md's "Board v-next" section — read that
 before referencing a row by number, there are three different numbers and
 they are not interchangeable** (the internal plate id, the chat/agenda
 running position Dan actually speaks, and this pass's per-sprint view slot).
+
+Same day, a second spec item landed (obs 1086, after a real incident):
+`waiting_on`/**Note** is Claude's own musing, never assumed to mirror the
+Jira ticket. A new **Last Comment** column (`board_rows.last_comment`,
+migration v16) exists to show the actual live Jira comment alongside it —
+schema + `board_update` param + view display only, blank for now. **atlas-v2
+does not fetch Jira itself and this pass did not add a Jira credential** —
+populating it live is an open follow-up for whoever next touches danfeed.
+Full writeup in README.md's "Note vs Last Comment" section.

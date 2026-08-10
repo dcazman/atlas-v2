@@ -462,6 +462,22 @@ if (db.prepare('PRAGMA user_version').get().user_version < 15) {
   db.exec('PRAGMA user_version = 15');
 }
 
+// v16: board_rows.last_comment - the actual last Jira comment text, kept
+// separate from waiting_on on purpose (Dan Aug 10, after PCT-16053's own
+// description carried forward a stale name mix-up with no way to tell it was
+// stale). waiting_on is Claude's OWN internal note/context and is never
+// assumed to mirror the ticket; last_comment is meant to be the live Jira-
+// side truth for comparison. IMPORTANT: atlas-v2 does NOT fetch Jira itself -
+// this column is a pure additive ledger field. Populating it is danfeed's
+// job (it already polls Jira for board_update the same way it maintains
+// status/sprint/in_sprint) via a future board_update {last_comment} call;
+// until that lands this column is written by nobody and renders blank. Do
+// not add Jira-fetching code to this service - see obs 1086/1087.
+if (db.prepare('PRAGMA user_version').get().user_version < 16) {
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN last_comment TEXT'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 16');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -831,6 +847,7 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.in_sprint !== undefined) { sets.push('in_sprint = ?'); vals.push(fields.in_sprint ? 1 : 0); }
   if (fields.sprint !== undefined) { sets.push('sprint = ?'); vals.push(fields.sprint); }
   if (fields.on_board !== undefined) { sets.push('on_board = ?'); vals.push(fields.on_board ? 1 : 0); }
+  if (fields.last_comment !== undefined) { sets.push('last_comment = ?'); vals.push(fields.last_comment); }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);

@@ -452,7 +452,7 @@ function registerTools(server, auth) {
       title: z.string().describe('Short row headline.'),
       status: BOARD_STATUS.optional().describe('Defaults to "todo".'),
       related: z.array(z.string()).min(1).describe('Required - one or more ticket numbers, e.g. ["PCT-15801"]. A board piece must carry a ticket ("on the board => it has a ticket").'),
-      waiting_on: z.string().optional().describe('Who or what the row is blocked on (for waiting/blocked rows).'),
+      waiting_on: z.string().optional().describe('Claude\'s OWN internal note/context on this row - NOT a mirror of the Jira ticket and never assumed to reflect its current state (Atlas obs 1086, Aug 10, after PCT-16053 carried forward a stale name mix-up). Write what Claude currently understands, re-check Jira before trusting it.'),
       source_date: z.string().optional().describe('The ticket real date (e.g. Jira created, ISO) so board age reflects true ticket age, not time-on-board.'),
       in_sprint: z.boolean().optional().describe('True if the ticket is in the current active sprint (drives current-sprint-first ordering). danfeed supplies this.'),
       sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
@@ -493,18 +493,22 @@ function registerTools(server, auth) {
     description:
       'Update a board row by its number - any subset of title / status / related / waiting_on. ' +
       'Timestamps are the database\'s job: updated_at bumps on every change, status_changed_at moves ' +
-      'only when status actually changes. Status is CHECK-enforced (active/waiting/blocked/done).',
+      'only when status actually changes. Status is CHECK-enforced (active/waiting/blocked/done). ' +
+      'waiting_on is Claude\'s OWN note, not ticket truth (see its describe) - it can go stale; the ' +
+      'view\'s Last Comment column is the intended live Jira-side check (not yet populated by anyone - ' +
+      'that\'s danfeed\'s follow-up, obs 1086/1087), this field never is that check.',
     inputSchema: {
       section: SECTION,
       row_id: z.number().int().describe('The immutable row number to update.'),
       title: z.string().optional(),
       status: BOARD_STATUS.optional(),
       related: z.array(z.string()).optional().describe('Replaces the related list.'),
-      waiting_on: z.string().optional(),
+      waiting_on: z.string().optional().describe('Claude\'s OWN internal note/context - NOT a mirror of the Jira ticket, never assumed current (obs 1086). Re-check Jira before trusting an existing one; don\'t just carry it forward.'),
       in_sprint: z.boolean().optional().describe('Mark whether the ticket is in the current active sprint (danfeed maintains this).'),
       sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
+      last_comment: z.string().optional().describe('The actual last Jira comment text - live ticket-side truth, kept separate from waiting_on on purpose (obs 1086). This is danfeed\'s field to write (it already polls Jira), not Claude\'s in a chat session - atlas-v2 itself never fetches Jira.'),
     },
-  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint, sprint }) => {
+  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint, sprint, last_comment }) => {
     const fields = {};
     if (title !== undefined) fields.title = title;
     if (status !== undefined) fields.status = status;
@@ -512,6 +516,7 @@ function registerTools(server, auth) {
     if (waiting_on !== undefined) fields.waiting_on = waiting_on;
     if (in_sprint !== undefined) fields.in_sprint = in_sprint;
     if (sprint !== undefined) fields.sprint = sprint;
+    if (last_comment !== undefined) fields.last_comment = last_comment;
     const r = db.updateBoardRow(section, row_id, fields);
     if (!r.ok) return text(`No board row ${row_id} in ${section}.`);
     return json(r);
@@ -600,7 +605,8 @@ function registerTools(server, auth) {
     description:
       'Dan override: "move X to Y" - pin piece X at slot Y within the pinned band (top of the board). ' +
       'Pinned pieces always sit above the auto (oldest-first) band; the slot is clamped to the pinned ' +
-      'band length. Renumbers the pinned band to clean 1..k. Un-holds the piece if it was held.',
+      'band length. Renumbers the pinned band to clean 1..k. Pin is visual ordering ONLY - it never ' +
+      'touches status (Atlas obs 979/984 item 3, fixed 2026-08-10): a held piece stays On Hold when moved.',
     inputSchema: { section: SECTION, row_id: z.number().int(), position: z.number().int().min(1).describe('Target slot, 1 = top.') },
   }, async ({ section, row_id, position }) => {
     const r = db.moveBoardRow(section, row_id, position);
@@ -612,9 +618,10 @@ function registerTools(server, auth) {
     title: 'Put a piece On Hold (bottom band)',
     description:
       'Dan "drop X" / "hold X": set the piece to On Hold - sinks it to the bottom band (not lost, just ' +
-      'last) and clears any pin. A reason is preferred (paraphrase of the ticket); if omitted the piece is ' +
-      'flagged needs_note for Claude to fill or ask Dan - never blocked. Pair with Jira -> On Hold + comment (board-ops skill).',
-    inputSchema: { section: SECTION, row_id: z.number().int(), reason: z.string().optional().describe('Short reason it is on hold (paraphrase of the ticket). Optional - omit and it is flagged as needing a note.') },
+      'last) and clears any pin. A reason is preferred; if omitted the piece is ' +
+      'flagged needs_note for Claude to fill or ask Dan - never blocked. Pair with Jira -> On Hold + comment (board-ops skill). ' +
+      'The reason is Claude\'s OWN note (obs 1086) - not ticket truth, can go stale, re-check Jira before trusting an old one.',
+    inputSchema: { section: SECTION, row_id: z.number().int(), reason: z.string().optional().describe('Claude\'s OWN short reason it is on hold - NOT a mirror of the Jira ticket, never assumed current (obs 1086, after PCT-16053 carried a stale name mix-up forward). Optional - omit and it is flagged as needing a note.') },
   }, async ({ section, row_id, reason }) => {
     const r = db.holdBoardRow(section, row_id, reason);
     if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
