@@ -304,10 +304,10 @@ function renderBoard() {
 
   // ---- sprint grouping (item 1) + frozen numbering (item 5) ----------------
   const bySprint = new Map();
-  const backlog = [];
+  const backlogCandidates = [];
   for (const p of live) {
     const sp = (p.sprint || '').trim();
-    if (!sp) { backlog.push(p); continue; }
+    if (!sp) { backlogCandidates.push(p); continue; }
     if (!bySprint.has(sp)) bySprint.set(sp, { live: [], closed: [] });
     bySprint.get(sp).live.push(p);
   }
@@ -341,6 +341,25 @@ function renderBoard() {
   const inSprintSprints = [...new Set(live.filter((p) => p.in_sprint && p.sprint).map((p) => p.sprint))];
   const activeSprint = inSprintSprints.length ? inSprintSprints.slice().sort(numericSort)[0] : (allSprints[0] || '');
   const sprintOrder = activeSprint ? [activeSprint, ...allSprints.filter((sp) => sp !== activeSprint)] : allSprints;
+
+  // GSSD-no-sprint fix (Dan, Aug 10, caught via #76/#77): GSSD tickets carry
+  // no Jira sprint field at all, so a GSSD piece always had sp='' above and
+  // landed in Backlog - never reaching the bottom-of-sprint GSSD pile, which
+  // was exactly the "easy to forget" spot Dan built that pile to avoid. A
+  // GSSD-tagged piece with no sprint now defaults into the ACTIVE sprint's
+  // block (still bottom-clustered there, same as any other GSSD piece) -
+  // non-GSSD sprint-less pieces are unaffected and still go to Backlog.
+  // activeSprint, whenever truthy, always already has a bySprint entry (it
+  // was derived FROM bySprint's own keys/values above), so this only ever
+  // appends to an existing bucket - it never needs to touch sprintOrder.
+  const backlog = [];
+  for (const p of backlogCandidates) {
+    if (activeSprint && hasGssdKey(p.related)) {
+      bySprint.get(activeSprint).live.push(p);
+    } else {
+      backlog.push(p);
+    }
+  }
 
   let body = '';
   for (const sp of sprintOrder) body += renderSprintBlock(sp, bySprint.get(sp), sp === activeSprint);
