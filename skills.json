@@ -1,0 +1,38 @@
+[
+  {
+    "name": "agenda",
+    "description": "Build Dan's work agenda — pull Jira, calendar, and danfeed/Slack, reconcile the board and Atlas, propose a short cleanup, and output one oldest-first numbered list that follows the board. Use when Dan asks for \"agenda\", \"my day\", \"what's on my plate\", or \"what am I doing today\"."
+  },
+  {
+    "name": "board-ops",
+    "description": "Execute Dan's board moves — \"move X to Y\", \"work on X\", \"drop/hold X\", \"close X\", \"move X back\" — keeping the board and Jira in sync with a smart comment. Use whenever Dan gives a move command against a board piece. A bare number means the BOARD (the tray only if he says \"tray\")."
+  },
+  {
+    "name": "cleanup",
+    "description": "End-of-session cleanup + clean handoff. Reconcile the board against Jira, sweep the needs_note flags, groom the tray, check Atlas and the docs are current, then leave a concise handoff so the NEXT thread boots into a trustworthy state. Use when Dan says \"cleanup\", \"handoff\", \"wrap up\", \"clean up for the next thread\", or \"end of day\"."
+  },
+  {
+    "name": "consume",
+    "description": "Dan pastes a blast of content (a meeting summary, email, thread, notes) and says \"consume\". Claude reads it, and either associates it to the matching ticket with a smart summary of the actions/takeaways, or drops it in the tray. When the match is fuzzy, ASK before doing anything. Use whenever Dan says \"consume\" and pastes content."
+  },
+  {
+    "name": "groom",
+    "description": "Mid-thread hygiene sweep — reconcile the board against Jira, sweep needs_note flags, groom the tray, check Atlas and the docs are current. Same sweep as cleanup, minus the handoff. Use when Dan says \"groom\" — for tidying a long-running thread that keeps aging instead of ending."
+  },
+  {
+    "name": "sidebar",
+    "description": "Raise off-agenda items to Dan — proposals, drift/reconcile findings, mentions to triage, ideas, questions, heads-ups — SEPARATELY from the agenda, so the agenda stays one clean focus. Use right after an agenda, or any time Claude has something to surface that is not a board story."
+  },
+  {
+    "name": "startup",
+    "description": "The master/conductor come-online routine Dan invokes to start his working thread. Invoking it MEANS this thread is the Conductor — no role question. It reads the most recent handoff, organizes the board against Jira, then runs and PRESENTS the full agenda with the handoff in mind. Use when Dan says \"startup\", \"boot me up\", \"start my day\", or \"come online\"."
+  },
+  {
+    "name": "tray",
+    "description": "Groom and act on Dan's tray (pending items) — \"groom tray\"/\"clean the tray\", \"promote X\" (aka \"make a story with tray X\"), \"dismiss X\", merge. The tray is the noise/triage pile that feeds the board. Use whenever Dan works the tray or names a \"tray X\" item."
+  },
+  {
+    "name": "worker",
+    "description": "\"worker N <task>\" / \"/worker N <task>\" — pin the board item at slot N and hand it to a named worker thread scoped to it, with one Atlas obs Dan can check for status. Use whenever Dan says \"worker\" followed by a board number and a task."
+  }
+]

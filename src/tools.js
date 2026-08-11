@@ -435,6 +435,7 @@ function registerTools(server, auth) {
   // together in item 3, so the destructive path never ships without its fence.
   // -------------------------------------------------------------------------
   const BOARD_STATUS = z.enum(['todo', 'in_progress', 'on_hold', 'done']);
+  const WORKER_STATUS = z.enum(['active', 'on_hold', 'done']);
 
   function decorate(row) {
     return {
@@ -784,6 +785,76 @@ function registerTools(server, auth) {
     if (!r.ok) return text(`No pending item ${pending_id} in ${section}.`);
     db.logEvent(section, `Board: recovered pending #${pending_id} back to the tray`);
     return json({ ok: true, reopened: pending_id });
+  });
+
+  // -------------------------------------------------------------------------
+  // WORKERS (see /worker skill). Structured record for a spawned worker thread
+  // scoped to one board piece - name, status, tied ticket(s)/board row, task,
+  // and the Atlas obs it reports live progress to. Replaces the old approach
+  // of burying this in unstructured free text so "what are my workers doing
+  // right now" is a query, not a chase.
+  // -------------------------------------------------------------------------
+  guarded('worker_add', {
+    title: 'Add worker',
+    description:
+      'Register a spawned /worker thread as a structured record: its name, the task, which ticket(s)/board ' +
+      'piece it is scoped to, and (once created) the Atlas observation id it reports status to. Call this from ' +
+      'the /worker workflow right after pinning the board piece and naming the worker, so "what are my workers ' +
+      'doing" is a query instead of free text buried in one big entity.',
+    inputSchema: {
+      section: SECTION,
+      name: z.string().describe('Short topic-based worker name, e.g. "c-gcp" - no real-person-name collisions.'),
+      title: z.string().describe('One-line task description.'),
+      related: z.array(z.string()).optional().describe('Ticket key(s) this worker is scoped to, e.g. ["PCT-15853"]. Leave empty rather than guessing if not yet known.'),
+      board_row_id: z.number().int().optional().describe('The board piece (row number) this worker is tied to, if any.'),
+      status: WORKER_STATUS.optional().describe('Defaults to "active".'),
+      obs_id: z.number().int().optional().describe('The Atlas observation id where this worker writes its short plain-text progress lines (started/found X/blocked/done). Omit if not created yet.'),
+    },
+  }, async ({ section, name, title, related, board_row_id, status, obs_id }) => {
+    return json(db.createWorker(section, name, title, { related, board_row_id, status, obs_id }));
+  });
+
+  guarded('worker_list', {
+    title: 'List workers',
+    description:
+      'List worker records for a section - name, status, tied ticket(s)/board piece, task, and which Atlas ' +
+      'obs to check for live progress. Hides done workers by default (same pattern as board_list); pass ' +
+      'include_done for the full history. Use this to answer "what are my workers doing right now" directly.',
+    inputSchema: {
+      section: SECTION,
+      include_done: z.boolean().optional().describe('Include done workers too (default false).'),
+    },
+  }, async ({ section, include_done }) => {
+    return json(db.listWorkers(section, include_done));
+  });
+
+  guarded('worker_update', {
+    title: 'Update a worker',
+    description:
+      'Update a worker record by id - any subset of name / title / related / board_row_id / status / obs_id. ' +
+      'Use this to move a worker to on_hold/done, correct its ticket(s), or attach the Atlas obs once created. ' +
+      'updated_at bumps automatically on any change (same trigger pattern as board_rows).',
+    inputSchema: {
+      section: SECTION,
+      worker_id: z.number().int().describe('The worker record id to update.'),
+      name: z.string().optional(),
+      title: z.string().optional(),
+      related: z.array(z.string()).optional().describe('Replaces the related ticket list.'),
+      board_row_id: z.number().int().nullable().optional().describe('The board piece this worker is tied to; pass null to clear.'),
+      status: WORKER_STATUS.optional(),
+      obs_id: z.number().int().nullable().optional().describe('The Atlas observation id this worker reports to; pass null to clear.'),
+    },
+  }, async ({ section, worker_id, name, title, related, board_row_id, status, obs_id }) => {
+    const fields = {};
+    if (name !== undefined) fields.name = name;
+    if (title !== undefined) fields.title = title;
+    if (related !== undefined) fields.related = related;
+    if (board_row_id !== undefined) fields.board_row_id = board_row_id;
+    if (status !== undefined) fields.status = status;
+    if (obs_id !== undefined) fields.obs_id = obs_id;
+    const r = db.updateWorker(section, worker_id, fields);
+    if (!r.ok) return text(`No worker ${worker_id} in ${section}.`);
+    return json(r);
   });
 }
 

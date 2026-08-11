@@ -4,6 +4,8 @@ const express = require('express');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { registerTools } = require('./tools');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const PORT = process.env.PORT || 7784;
 const ATLAS_TOKEN = process.env.ATLAS_TOKEN;
@@ -163,10 +165,32 @@ function boardBadge(s) {
   return `<span class="b b-${esc(s)}">${esc(String(s).replace(/_/g, ' '))}</span>`;
 }
 
+// Workers have their own (smaller) status vocabulary - reuse the board's
+// existing badge colors rather than inventing new CSS (active~in_progress).
+function workerBadge(status) {
+  const map = { active: 'in_progress', on_hold: 'on_hold', done: 'done' };
+  return `<span class="b b-${esc(map[status] || 'todo')}">${esc(String(status).replace(/_/g, ' '))}</span>`;
+}
+
 function parseRelated(related) {
   let rel = [];
   try { rel = JSON.parse(related); } catch (e) { rel = [related]; }
   return Array.isArray(rel) ? rel : [rel];
+}
+
+// Static skills-directory snapshot. atlas-v2 runs on a different host than the
+// skill files, so this is written ahead of time (skills.json, repo root) rather
+// than read live. Re-read every render (it's tiny) so updating the file alone
+// is enough - no redeploy needed. Missing/bad file renders an empty list, never
+// a crash.
+function loadSkills() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, '..', 'skills.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
 }
 
 // A "GSSD piece" carries a raw GSSD-* key anywhere in related (Dan, 2026-08-10
@@ -193,7 +217,7 @@ function slotRow(slot, p, isClosed) {
     isClosed ? 'closed' : '',
     pinned ? 'pinned' : '',
   ].filter(Boolean).join(' ');
-  const pin = pinned ? '<span class="pin" title="pinned - attention only, never changes status">\u{1F4CC}</span> ' : '';
+  const pin = pinned ? '<span class="pin" title="pinned - moved to in_progress, shows in the In Progress strip">\u{1F4CC}</span> ' : '';
   return `<tr id="${rowAnchorId(p.related, p.id)}" class="${rowCls}"><td class="pos${numGrey ? ' num-grey' : ''}">${esc(slot)}</td><td>${pin}${esc(p.title)}</td><td>${boardBadge(p.status)}</td><td class="sp">${esc(p.sprint || 'B')}</td>`
     + `<td class="tk">${rel.map((r) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>')}</td>`
     + `<td class="${nn ? 'note-flag' : ''}">${p.waiting_on ? esc(p.waiting_on) : (nn ? '⚠ needs a note' : '')}</td>`
@@ -269,36 +293,31 @@ function renderBacklogBlock(rows) {
   return `<tr class="zonehdr zh-backlog"><td colspan="8">BACKLOG · NO SPRINT</td></tr>` + rowsHtml;
 }
 
-// Activity strip (Board v-next item 4): what moved or closed recently, so
-// coming back to the board doesn't require re-deriving state from scratch.
-// Board v-next: activity items link to where the row actually sits on the
-// board (Dan, 2026-08-10) - jump/scroll to it in its sprint block instead of
-// being plain text. Same anchor scheme slotRow writes (rowAnchorId), so a
-// click lands exactly on the row if it's currently rendered anywhere on the
-// page; if its sprint has aged off the view the link is just a harmless
-// same-page no-op (nothing to 404 against).
-function activityStrip(activity) {
-  if (!activity || !activity.length) return '<div class="activity empty-act">Nothing moved recently.</div>';
-  const items = activity.map((a) => {
-    const rel = parseRelated(a.related);
-    const key = rel[0] || ('#' + a.row_id);
-    const verb = a.kind === 'closed' ? 'closed'
-      : a.kind === 'started' ? 'started'
-      : a.kind === 'held' ? 'on hold'
-      : a.kind === 'moved' ? ('→ S' + esc(a.sprint || ''))
-      : 'back to todo';
-    return `<span class="act-item"><a href="#${rowAnchorId(a.related, a.row_id)}"><b>${esc(key)}</b></a> ${esc(verb)}</span>`;
+// In Progress strip (redefined 2026-08-11, Dan): shows only pieces currently
+// sitting at status=in_progress, so the strip answers "what am I working on
+// right now" instead of a change log. Pinning (board_bump) is now paired with
+// moving a story to in_progress + a Jira comment, so every pin surfaces here.
+// Same anchor scheme slotRow writes (rowAnchorId), so a click jumps straight
+// to the row in its sprint block.
+function inProgressStrip(pieces) {
+  const wip = pieces.filter((p) => p.status === 'in_progress');
+  if (!wip.length) return '<div class="activity empty-act">Nothing in progress.</div>';
+  const items = wip.map((p) => {
+    const rel = parseRelated(p.related);
+    const key = rel[0] || ('#' + p.id);
+    return `<span class="act-item"><a href="#${rowAnchorId(p.related, p.id)}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
   }).join('<span class="act-sep">·</span>');
-  return `<div class="activity"><span class="activity-label">RECENT</span> ${items}</div>`;
+  return `<div class="activity"><span class="activity-label">IN PROGRESS</span> ${items}</div>`;
 }
 
 function renderBoard() {
-  let pieces = [], pending = [], reminders = [], activity = [];
+  let pieces = [], pending = [], reminders = [];
   try { pieces = dbMod.listBoardRows(BOARD_SECTION, true); } catch (e) { /* render empty on error */ }
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
-  try { activity = dbMod.recentActivity(BOARD_SECTION, 7); } catch (e) {}
-
+  let workers = [];
+  try { workers = dbMod.listWorkers(BOARD_SECTION, false); } catch (e) {}
+  const skills = loadSkills();
   const live = pieces.filter((p) => p.status !== 'done');
   const closed = pieces.filter((p) => p.status === 'done');
 
@@ -371,6 +390,12 @@ function renderBoard() {
   const remRows = reminders.map((r, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${r.id}</td><td>${esc(r.content)}</td><td class="sp">${esc(r.trigger_date || '')}${r.trigger_time ? ' ' + esc(r.trigger_time) : ''}</td><td class="src">${esc(r.entity || '')}</td><td class="age">${boardDaysSince(r.created_at)}</td></tr>`
   ).join('');
+  const workerRows = workers.map((w) => {
+    const rel = parseRelated(w.related);
+    const tickets = rel.length ? rel.map((k) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(k)}" target="_blank" rel="noopener">${esc(k)}</a>`).join('<br>') : '';
+    return `<tr><td>${esc(w.name)}</td><td>${workerBadge(w.status)}</td><td class="tk">${tickets}</td><td>${esc(w.title)}</td><td class="id">${w.obs_id ?? ''}</td><td class="age">${boardDaysSince(w.updated_at)}</td></tr>`;
+  }).join('');
+  const skillRows = skills.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.description)}</td></tr>`).join('');
 
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -437,11 +462,12 @@ function renderBoard() {
   <span class="meta">as of ${esc(boardStamp())}</span>
   <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
-${activityStrip(activity)}
+${inProgressStrip(live)}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
+  <button id="tw" onclick="show('workers')">Workers (${workers.length})</button>
 </div>
 <div id="board" class="panel on">
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
@@ -452,10 +478,16 @@ ${activityStrip(activity)}
 <div id="reminders" class="panel">
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
 </div>
-<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin only highlights (never changes status). The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
+<div id="workers" class="panel">
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Active Workers</h3>
+  ${workerRows ? `<table><thead><tr><th>Name</th><th>Status</th><th>Ticket(s)</th><th>Task</th><th>Obs&nbsp;#</th><th>Age</th></tr></thead><tbody>${workerRows}</tbody></table>` : `<div class="empty">No active workers.</div>`}
+  <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Skills Directory</h3>
+  ${skillRows ? `<table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>${skillRows}</tbody></table>` : `<div class="empty">No skills found.</div>`}
+</div>
+<footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
-function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders')show(t);}catch(e){}})();
+function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
 setInterval(function(){location.reload();},30000);
 </script>
 </body></html>`;

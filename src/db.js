@@ -352,6 +352,31 @@ db.exec(`
     AFTER UPDATE OF state ON pending_items FOR EACH ROW
     WHEN OLD.state = 'pending' AND NEW.state <> 'pending'
     BEGIN UPDATE pending_items SET resolved_at = datetime('now') WHERE id = NEW.id; END;
+
+  -- v17: WORKERS (see /worker skill). A structured record for a spawned worker
+  -- thread scoped to one board piece, so "what are my workers doing" is a query
+  -- instead of unstructured free text. obs_id points at the Atlas observation
+  -- the worker itself writes short plain-text progress lines to - this table is
+  -- the queryable index, not a replacement for that obs.
+  CREATE TABLE IF NOT EXISTS workers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+    name TEXT NOT NULL,
+    title TEXT NOT NULL,
+    related TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(related)),
+    board_row_id INTEGER REFERENCES board_rows(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','on_hold','done')),
+    obs_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_workers_section ON workers(section);
+
+  -- updated_at bumps on every write, same pattern as board_rows_touch.
+  CREATE TRIGGER IF NOT EXISTS workers_touch
+    AFTER UPDATE ON workers FOR EACH ROW
+    BEGIN UPDATE workers SET updated_at = datetime('now') WHERE id = NEW.id; END;
 `);
 
 // schema version marker. board_rows + pending_items are created above via
@@ -477,6 +502,12 @@ if (db.prepare('PRAGMA user_version').get().user_version < 15) {
 if (db.prepare('PRAGMA user_version').get().user_version < 16) {
   try { db.exec('ALTER TABLE board_rows ADD COLUMN last_comment TEXT'); } catch (e) { /* already present */ }
   db.exec('PRAGMA user_version = 16');
+}
+
+// v17: workers table (see CREATE block above) - CREATE ... IF NOT EXISTS already
+// added it for both fresh and existing installs; this just records the bump.
+if (db.prepare('PRAGMA user_version').get().user_version < 17) {
+  db.exec('PRAGMA user_version = 17');
 }
 
 function findEntity(section, name) {
@@ -1032,6 +1063,58 @@ function recentActivity(section, days) {
     .slice(0, 15);
 }
 
+// ---------------------------------------------------------------------------
+// workers (v17, see /worker skill). Primitives only, matching the board_rows/
+// pending_items shape: section-scoped, related stored as a JSON string, obs_id
+// is a plain nullable pointer (no FK - it lives in Atlas, a separate service).
+// updated_at is owned by the workers_touch trigger, never written here.
+// ---------------------------------------------------------------------------
+function createWorker(section, name, title, opts = {}) {
+  const arr = Array.isArray(opts.related)
+    ? opts.related
+    : (typeof opts.related === 'string' ? JSON.parse(opts.related) : []);
+  const info = db.prepare(
+    `INSERT INTO workers (section, name, title, related, board_row_id, status, obs_id)
+     VALUES (?, ?, ?, ?, ?, COALESCE(?, 'active'), ?)`
+  ).run(section, name, title, JSON.stringify(arr), opts.board_row_id ?? null, opts.status ?? null, opts.obs_id ?? null);
+  return { worker_id: info.lastInsertRowid };
+}
+
+function listWorkers(section, includeDone) {
+  const sql = includeDone
+    ? 'SELECT * FROM workers WHERE section = ? ORDER BY created_at ASC, id ASC'
+    : "SELECT * FROM workers WHERE section = ? AND status != 'done' ORDER BY created_at ASC, id ASC";
+  return db.prepare(sql).all(section);
+}
+
+function getWorker(section, id) {
+  return db.prepare('SELECT * FROM workers WHERE id = ? AND section = ?').get(id, section);
+}
+
+function updateWorker(section, id, fields = {}) {
+  const row = getWorker(section, id);
+  if (!row) return { ok: false, reason: 'not_found' };
+  const sets = [], vals = [];
+  if (fields.name !== undefined)        { sets.push('name = ?');         vals.push(fields.name); }
+  if (fields.title !== undefined)       { sets.push('title = ?');        vals.push(fields.title); }
+  if (fields.related !== undefined)     { sets.push('related = ?');      vals.push(typeof fields.related === 'string' ? fields.related : JSON.stringify(fields.related)); }
+  if (fields.board_row_id !== undefined) { sets.push('board_row_id = ?'); vals.push(fields.board_row_id); }
+  if (fields.status !== undefined)      { sets.push('status = ?');       vals.push(fields.status); }
+  if (fields.obs_id !== undefined)      { sets.push('obs_id = ?');       vals.push(fields.obs_id); }
+  if (sets.length === 0) return { ok: true, worker_id: id, unchanged: true };
+  vals.push(id, section);
+  db.prepare(`UPDATE workers SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
+  return { ok: true, worker_id: id };
+}
+
+// Retire a worker the sanctioned way - status=done (kept forever, same
+// VIEW-vs-STORE spirit as the rest of this file; no delete tool for workers).
+function closeWorker(section, id) {
+  const row = getWorker(section, id);
+  if (!row) return { ok: false, reason: 'not_found' };
+  return updateWorker(section, id, { status: 'done' });
+}
+
 module.exports = {
   getLandscape,
   getEntity,
@@ -1075,4 +1158,9 @@ module.exports = {
   getSlotHistoryForRow,
   listSlottedSprints,
   recentActivity,
+  createWorker,
+  listWorkers,
+  getWorker,
+  updateWorker,
+  closeWorker,
 };

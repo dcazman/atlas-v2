@@ -465,9 +465,11 @@ remember — because a list kept by memory is exactly the list you can't trust.
 - **Read-only view** branded ATLAS (logo + favicon) with a `GET /api` JSON feed; the SessionStart
   boot hook injects the live board every chat and instructs a reconcile. Act-vs-ask follows the
   Trust model (obs 879) + Known Traps floor (obs 880); the `/agenda` skill runs the full routine.
-- **Read-only view:** LAN page on port **7795** (`http://192.168.50.23:7795/`), 2 tabs, 30s
-  refresh, not tunneled / no auth. VIEW vs STORE (obs 875): the view shows live items only;
-  the store keeps everything (closed/merged/dismissed are dismissed-from-view, not deleted).
+- **Read-only view:** LAN page on port **7795** (`http://192.168.50.23:7795/`), 4 tabs (Board /
+  Tray / Reminders / Workers), 30s refresh, not tunneled / no auth. VIEW vs STORE (obs 875): the
+  view shows live items only; the store keeps everything (closed/merged/dismissed are
+  dismissed-from-view, not deleted). Workers tab needs `skills.json` present at build time —
+  see README.md "Workers tab" note if it's ever missing.
 - **Design of record:** obs 872 (schema), 874 (north star + operating model), 875 (view law),
   873 (governing rule), 870 (Dan working model). Seeded 2026-07-27 (13 pieces + 2 pending).
 - **Remaining:** danfeed→pending auto-feed and auto-drift-injection in the boot hook (both ride

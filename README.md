@@ -202,7 +202,7 @@ Everything above describes v1 and stays for history. v2 changes:
 1. `cd /mnt/user/warehouse && git clone https://github.com/dcazman/atlas-v2.git` *(repo being created — until then this folder is the only copy of the code)*
 2. Restore data: clone the atlas-v2 data backup into `/mnt/user/appdata/atlas-v2` *(backup job being added — audit item 1; until then the DB exists ONLY on this server)*
 3. Create `.env` from vault note 308.
-4. `docker compose up -d --build` (compose file corrected 2026-07 — image :v2, port 7790).
+4. Confirm `skills.json` exists at the repo root (regenerate per the Workers-tab note below if not — the Dockerfile `COPY`s it, so the build fails without it), then `docker compose up -d --build` (compose file corrected 2026-07 — image :v2, port 7790).
 5. Bring up mcp-auth-proxy-atlas (OAuth creds in vault note 308, upstream **7790**).
 6. Test from Claude: `get_landscape` on both work and personal should answer.
 
@@ -251,11 +251,25 @@ leave an `events` trace and retain the row (nothing silently vanishes). Merge & 
 
 ## Read-only view
 A plain HTTP page on **port 7795** (host-published, **LAN only — NOT on the Cloudflare
-tunnel, so no auth gate**). Internal URL: **http://192.168.50.23:7795/**. Two tabs (Jira
-Board / Pending), oldest-first, auto-refresh 30s. Renders straight off the tables;
-done/merged/dismissed are dismissed-from-view but kept in the store (VIEW vs STORE). Env:
-`BOARD_PORT` (7795), `BOARD_SECTION` (work). Served by a second Express listener in
-`src/server.js`. No day-of view — Dan keeps his own calendar; the calendar is Claude's input, not a rebuilt tab.
+tunnel, so no auth gate**). Internal URL: **http://192.168.50.23:7795/**. Four tabs — Board,
+Tray (pending), Reminders, and Workers — oldest-first, auto-refresh 30s. Renders straight off
+the tables; done/merged/dismissed are dismissed-from-view but kept in the store (VIEW vs
+STORE). Env: `BOARD_PORT` (7795), `BOARD_SECTION` (work). Served by a second Express
+listener in `src/server.js`. No day-of view — Dan keeps his own calendar; the calendar is
+Claude's input, not a rebuilt tab.
+
+**Workers tab (added 2026-08-11):** top panel is a live `workers` table (name, status,
+related ticket(s), title, `obs_id`, age) — one row per `/worker N <task>` run, so "what's my
+worker doing" is a query, not a chase. CRUD via `worker_add` / `worker_list` / `worker_update`.
+Bottom panel is a skills directory (name + description) read from `skills.json` at the repo
+root — **that file is a static snapshot Claude generates from the real
+`.claude/skills/*/SKILL.md` frontmatter** (those live on Dan's machine, not this server, so
+the app can't read them live). **The Dockerfile's `COPY skills.json ./skills.json` means the
+image build FAILS if that file is missing** — it must exist (and be committed) before running
+`docker build`/`docker compose up --build`. If it's ever lost: regenerate it by reading every
+skill's frontmatter (`name` + `description` between the `---` markers) into a JSON array of
+`{name, description}` objects, alphabetical by name, and write it to
+`/warehouse/atlas-v2/skills.json`.
 
 ## Lifecycle fences (item 3)
 Two triggers: `board_rows_close_needs_ledger` (status=done is refused unless `closure_ref` is set — no
