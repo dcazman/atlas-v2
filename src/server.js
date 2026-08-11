@@ -302,10 +302,13 @@ function renderBacklogBlock(rows) {
 function inProgressStrip(pieces) {
   const wip = pieces.filter((p) => p.status === 'in_progress');
   if (!wip.length) return '<div class="activity empty-act">Nothing in progress.</div>';
-  const items = wip.map((p) => {
+  // Flat 1..N index (Dan, 2026-08-11) - a quick number to speak in chat for
+  // whatever's in this strip, same idea as the Tray/Reminders panel numbers,
+  // distinct from the frozen per-sprint Slot shown in the board table below.
+  const items = wip.map((p, i) => {
     const rel = parseRelated(p.related);
     const key = rel[0] || ('#' + p.id);
-    return `<span class="act-item"><a href="#${rowAnchorId(p.related, p.id)}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
+    return `<span class="act-item"><span class="act-n">${i + 1}.</span> <a href="#${rowAnchorId(p.related, p.id)}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
   }).join('<span class="act-sep">·</span>');
   return `<div class="activity"><span class="activity-label">IN PROGRESS</span> ${items}</div>`;
 }
@@ -413,6 +416,7 @@ function renderBoard() {
   .activity{padding:8px 18px;font-size:12px;color:#cfd6e2;border-bottom:1px solid #2a2f3a;background:#141822;white-space:nowrap;overflow-x:auto}
   .activity.empty-act{color:#5b6472;font-style:italic}
   .activity-label{color:#6b7280;letter-spacing:.08em;font-size:10px;margin-right:10px}
+  .act-n{color:#6b7280;font-variant-numeric:tabular-nums}
   .act-item b{color:#e0b24a;font-weight:600}
   .act-item a{text-decoration:none}
   .act-item a:hover b{text-decoration:underline}
@@ -426,8 +430,8 @@ function renderBoard() {
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #222833;vertical-align:top}
   th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;background:#0f1115;z-index:5;box-shadow:inset 0 -1px 0 #222833}
   td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
-  td.pos{color:#4b5563;font-variant-numeric:tabular-nums;width:30px}
-  td.pos.num-grey{color:#3a4150}
+  td.pos{color:#e6e6e6;font-variant-numeric:tabular-nums;width:30px}
+  td.pos.num-grey{color:#e6e6e6}
   td.sp{color:#9fb0c3;font-variant-numeric:tabular-nums;width:54px;text-align:center}
   td.note-flag{color:#e0a04a;font-style:italic}
   td.last-comment{color:#cfd6e2;font-size:12px;max-width:260px}
