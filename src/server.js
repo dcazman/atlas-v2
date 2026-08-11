@@ -299,16 +299,18 @@ function renderBacklogBlock(rows) {
 // moving a story to in_progress + a Jira comment, so every pin surfaces here.
 // Same anchor scheme slotRow writes (rowAnchorId), so a click jumps straight
 // to the row in its sprint block.
-function inProgressStrip(pieces) {
+function inProgressStrip(pieces, slotMap) {
   const wip = pieces.filter((p) => p.status === 'in_progress');
   if (!wip.length) return '<div class="activity empty-act">Nothing in progress.</div>';
-  // Flat 1..N index (Dan, 2026-08-11) - a quick number to speak in chat for
-  // whatever's in this strip, same idea as the Tray/Reminders panel numbers,
-  // distinct from the frozen per-sprint Slot shown in the board table below.
-  const items = wip.map((p, i) => {
+  // The number shown here IS the same frozen per-sprint Slot from the board
+  // table below (Dan, 2026-08-11 - a strip-local 1..N index was confusing,
+  // since "spot 17" has to mean the same thing everywhere he says it).
+  const items = wip.map((p) => {
     const rel = parseRelated(p.related);
     const key = rel[0] || ('#' + p.id);
-    return `<span class="act-item"><span class="act-n">${i + 1}.</span> <a href="#${rowAnchorId(p.related, p.id)}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
+    const slot = (slotMap.get(p.id) || {}).slot;
+    const anchor = rowAnchorId(p.related, p.id);
+    return `<span class="act-item">${slot != null ? `<span class="act-n">${esc(slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
   }).join('<span class="act-sep">·</span>');
   return `<div class="activity"><span class="activity-label">IN PROGRESS</span> ${items}</div>`;
 }
@@ -466,7 +468,7 @@ function renderBoard() {
   <span class="meta">as of ${esc(boardStamp())}</span>
   <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
-${inProgressStrip(live)}
+${inProgressStrip(live, computeSlotMap())}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
@@ -492,6 +494,19 @@ ${inProgressStrip(live)}
 <script>
 function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
 (function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
+// Jump links (e.g. the In Progress strip) can point at a row that's on the
+// Board tab while a different tab is active - a plain #anchor can't scroll to
+// something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).
+document.addEventListener('click', function(e){
+  const a = e.target.closest('.jump-link');
+  if (!a) return;
+  e.preventDefault();
+  show('board');
+  const id = a.getAttribute('data-target');
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({block:'center'});
+  location.hash = '#' + id;
+});
 setInterval(function(){location.reload();},30000);
 </script>
 </body></html>`;
