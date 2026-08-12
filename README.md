@@ -191,7 +191,7 @@ Everything above describes v1 and stays for history. v2 changes:
 
 ## How it runs here
 
-- Image: `dcazman/atlas:v2` · container `atlas-v2` · host port **7790** → 7784 inside
+- Image: `dcazman/atlas:v2` · container `atlas-v2` · host port **7790** → 7784 inside (MCP) · host port **7795** = the board view + `/api` (BOARD_PORT, same container)
 - Data: `/mnt/user/appdata/atlas-v2/atlas.db`
 - Public URL: `atlas.thecasmas.com` → **mcp-auth-proxy-atlas** (port 8080, GitHub login, only `dcazman`) → localhost:7790
 - `.env` in this folder: three scoped tokens (`sonos`=work, `home`=personal, `shared`) + `ANTHROPIC_API_KEY` for the groom worker. **Copies in Anchor vault note 308.**
@@ -199,12 +199,13 @@ Everything above describes v1 and stays for history. v2 changes:
 
 ## Rebuild from zero
 
-1. `cd /mnt/user/warehouse && git clone https://github.com/dcazman/atlas-v2.git` *(repo being created — until then this folder is the only copy of the code)*
-2. Restore data: clone the atlas-v2 data backup into `/mnt/user/appdata/atlas-v2` *(backup job being added — audit item 1; until then the DB exists ONLY on this server)*
+1. `cd /mnt/user/warehouse && git clone https://github.com/dcazman/atlas-v2.git` *(code backs up nightly at 02:00 — raid-backup job "atlas-v2")*
+2. Restore data: the DB backs up nightly at 02:15 to the **`data-backup` branch** of the same repo (raid-backup job "atlas-v2-data"). Restore: `cd /mnt/user/appdata && git clone -b data-backup https://github.com/dcazman/atlas-v2.git atlas-v2`
 3. Create `.env` from vault note 308.
 4. Confirm `skills.json` exists at the repo root (regenerate per the Workers-tab note below if not — the Dockerfile `COPY`s it, so the build fails without it), then `docker compose up -d --build` (compose file corrected 2026-07 — image :v2, port 7790).
 5. Bring up mcp-auth-proxy-atlas (OAuth creds in vault note 308, upstream **7790**).
-6. Test from Claude: `get_landscape` on both work and personal should answer.
+6. Test from Claude: `get_landscape` on both work and personal should answer. Also check the board view: `http://192.168.50.23:7795` renders and `/api` returns the board JSON.
+7. After ANY rebuild: Claude clients may hold a stale cached tool schema — if a session throws enum/validation errors on Atlas tools right after a rebuild, reconnect the Atlas connector in that client first; do not chase it as a code bug.
 
 Full server rebuild order: `warehouse/UNRAID-REBUILD.md`.
 
