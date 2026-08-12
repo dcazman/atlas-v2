@@ -351,13 +351,20 @@ function registerTools(server, auth) {
     description:
       'List reminders for a section, including ones not yet due. Use this to check what is ' +
       'scheduled, or pass include_dismissed to see resolved ones too. get_landscape only shows ' +
-      'reminders that are already due - use this tool for the full picture.',
+      'reminders that are already due - use this tool for the full picture. Each reminder carries ' +
+      'a "pos" field - this is the number Dan speaks ("reminder 11"), matching the Pos column on ' +
+      'the :7795 Reminders tab exactly (active-only, ordered by trigger_date ASC). Dismissed ' +
+      'reminders (only returned with include_dismissed) are off that view and carry pos: null - ' +
+      'never guess a position for one, ask Dan or use its raw id instead.',
     inputSchema: {
       section: SECTION,
       include_dismissed: z.boolean().optional().describe('Include dismissed reminders too (default false).'),
     },
   }, async ({ section, include_dismissed }) => {
-    return json(db.listReminders(section, include_dismissed));
+    const active = db.listReminders(section, false);
+    const posMap = new Map(active.map((r, i) => [r.id, i + 1]));
+    const rows = include_dismissed ? db.listReminders(section, true) : active;
+    return json(rows.map((r) => ({ ...r, pos: posMap.get(r.id) ?? null })));
   });
 
   // --- Due-reminder surfacing + timed firing ------------------------------------------
@@ -840,9 +847,9 @@ function registerTools(server, auth) {
       name: z.string().optional(),
       title: z.string().optional(),
       related: z.array(z.string()).optional().describe('Replaces the related ticket list.'),
-      board_row_id: z.number().int().nullable().optional().describe('The board piece this worker is tied to; pass null to clear.'),
+      board_row_id: z.union([z.literal(null), z.coerce.number().int()]).optional().describe('The board piece this worker is tied to; pass null to clear.'),
       status: WORKER_STATUS.optional(),
-      obs_id: z.number().int().nullable().optional().describe('The Atlas observation id this worker reports to; pass null to clear.'),
+      obs_id: z.union([z.literal(null), z.coerce.number().int()]).optional().describe('The Atlas observation id this worker reports to; pass null to clear.'),
     },
   }, async ({ section, worker_id, name, title, related, board_row_id, status, obs_id }) => {
     const fields = {};
