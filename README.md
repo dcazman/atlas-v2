@@ -332,6 +332,19 @@ thread. All five items are live in `src/server.js` + `src/db.js`:
 Also done earlier and untouched by this pass: the PCT-15634 duplicate board
 row dedupe (obs 979's "also").
 
+## ORDER band (added 2026-08-12, c-order worker)
+
+Dan's declared work order — "order 10, 5, 1" — without pinning. `board_order`
+takes `row_ids` in sequence and REPLACES the whole queue (`[]` clears it);
+stored in `board_rows.queue_pos` (migration v18, NULL = not queued). Renders
+as a grey band under the In Progress strip, pieces in queue sequence with
+their normal frozen Slot numbers; hidden when empty. **Pure intention:** Jira
+is never touched, statuses and frozen Slots never change. A piece drops out
+automatically when pinned (`board_bump`/`board_move`), closed, or offboarded
+(the rest keep their relative order); On Hold keeps it. `/api` exposes a
+top-level `order` array (row ids, queue sequence) and per-piece `queue_pos` —
+both additive, the existing shape is unchanged.
+
 ## Two numbers — the one Dan speaks is the SLOT (corrected 2026-08-10)
 
 The original v-next writeup here described THREE numbers, with the "chat/agenda
