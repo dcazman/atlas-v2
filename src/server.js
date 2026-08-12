@@ -315,6 +315,28 @@ function inProgressStrip(pieces, slotMap) {
   return `<div class="activity"><span class="activity-label">IN PROGRESS</span> ${items}</div>`;
 }
 
+// ORDER band (v18, board_order tool): Dan's declared work order - pure
+// intention. Jira never sees it, statuses and frozen Slot numbers untouched.
+// Renders below the In Progress strip, grey/neutral so it reads as intent, not
+// state; pieces in queue sequence, each with its normal frozen Slot number.
+// Hidden entirely when the queue is empty.
+function orderBand(pieces, slotMap) {
+  let ids = [];
+  try { ids = dbMod.listOrderQueue(BOARD_SECTION); } catch (e) {}
+  if (!ids.length) return '';
+  const byId = new Map(pieces.map((p) => [p.id, p]));
+  const queued = ids.map((id) => byId.get(id)).filter(Boolean);
+  if (!queued.length) return '';
+  const items = queued.map((p) => {
+    const rel = parseRelated(p.related);
+    const key = rel[0] || ('#' + p.id);
+    const slot = (slotMap.get(p.id) || {}).slot;
+    const anchor = rowAnchorId(p.related, p.id);
+    return `<span class="ord-item">${slot != null ? `<span class="act-n">${esc(slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
+  }).join('<span class="ord-sep">&rarr;</span>');
+  return `<div class="orderband"><span class="orderband-label" title="Dan's declared work order (board_order) - intention only, no Jira, no status change. A piece drops out when pinned, closed, or offboarded.">ORDER&nbsp;ⓘ</span> ${items}</div>`;
+}
+
 function renderBoard() {
   let pieces = [], pending = [], reminders = [];
   try { pieces = dbMod.listBoardRows(BOARD_SECTION, true); } catch (e) { /* render empty on error */ }
@@ -423,6 +445,12 @@ function renderBoard() {
   .act-item a{text-decoration:none}
   .act-item a:hover b{text-decoration:underline}
   .act-sep{color:#3a4150;margin:0 8px}
+  .orderband{padding:7px 18px;font-size:12px;color:#8b94a3;border-bottom:1px solid #222833;background:#10131a;white-space:nowrap;overflow-x:auto}
+  .orderband-label{color:#5b6472;letter-spacing:.08em;font-size:10px;margin-right:10px}
+  .ord-item b{color:#9fb0c3;font-weight:600}
+  .ord-item a{text-decoration:none}
+  .ord-item a:hover b{text-decoration:underline}
+  .ord-sep{color:#3a4150;margin:0 8px}
   .tabs{display:flex;gap:6px;padding:12px 18px 0}
   .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
   .tabs button.on{background:#232a36;color:#fff}
@@ -469,6 +497,7 @@ function renderBoard() {
   <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
 ${inProgressStrip(live, computeSlotMap())}
+${orderBand(live, computeSlotMap())}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
@@ -580,7 +609,9 @@ boardApp.get('/api', (req, res) => {
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length },
-    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, queue_pos: p.queue_pos ?? null, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    // v18 ORDER band (additive field): Dan's declared work order as row ids, queue sequence.
+    order: (() => { try { return dbMod.listOrderQueue(BOARD_SECTION); } catch (e) { return []; } })(),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
     // Board v-next item 4: what moved or closed recently (additive field).
     activity: activity.map((a) => ({ row_id: a.row_id, title: a.title, related: rel(a.related), kind: a.kind, sprint: a.sprint, at: a.at })),

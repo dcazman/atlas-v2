@@ -627,6 +627,24 @@ function registerTools(server, auth) {
     return json(r);
   });
 
+  guarded('board_order', {
+    title: "Declare Dan's work order (ORDER band)",
+    description:
+      'Dan "order 10, 5, 1": declare his intended work order without pinning. Takes board_rows ids in ' +
+      'the desired sequence (the caller resolves Dan\'s spoken Slot numbers to ids first) and REPLACES ' +
+      'the whole queue - ids not in the list drop out; an empty array clears the queue. Renders as the ' +
+      'grey ORDER band under the In Progress strip. Pure intention: Jira is never touched, statuses and ' +
+      'frozen Slot numbers never change. A row leaves the queue automatically when it gets pinned ' +
+      '(board_bump/board_move), closed, or offboarded; On Hold keeps it in the queue.',
+    inputSchema: {
+      section: SECTION,
+      row_ids: z.array(z.number().int()).describe('board_rows ids in the desired work order. Empty array clears the queue.'),
+    },
+  }, async ({ section, row_ids }) => {
+    const r = db.setBoardOrder(section, row_ids);
+    return json(r);
+  });
+
   guarded('board_hold', {
     title: 'Put a piece On Hold (bottom band)',
     description:

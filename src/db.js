@@ -510,6 +510,17 @@ if (db.prepare('PRAGMA user_version').get().user_version < 17) {
   db.exec('PRAGMA user_version = 17');
 }
 
+// v18: board_rows.queue_pos - Dan's declared work order ("order 10, 5, 1").
+// Pure intention: Jira never sees it, status never changes, frozen sprint_slots
+// numbering untouched. NULL = not in the queue. Written only by setBoardOrder
+// (whole-queue replace via the board_order tool); cleared automatically when a
+// row is pinned (bump/move), closed, or offboarded. On Hold does NOT clear it -
+// Dan may still intend to work a held piece later.
+if (db.prepare('PRAGMA user_version').get().user_version < 18) {
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN queue_pos INTEGER'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 18');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -889,6 +900,12 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.sprint !== undefined) { sets.push('sprint = ?'); vals.push(fields.sprint); }
   if (fields.on_board !== undefined) { sets.push('on_board = ?'); vals.push(fields.on_board ? 1 : 0); }
   if (fields.last_comment !== undefined) { sets.push('last_comment = ?'); vals.push(fields.last_comment); }
+  if (fields.queue_pos !== undefined) { sets.push('queue_pos = ?'); vals.push(fields.queue_pos); }
+  // Order-queue auto-drop (v18): closing or offboarding removes the row from
+  // Dan's declared queue; the rest keep their relative order. On Hold keeps it.
+  if (fields.queue_pos === undefined && (fields.status === 'done' || (fields.on_board !== undefined && !fields.on_board))) {
+    sets.push('queue_pos = NULL');
+  }
   if (sets.length === 0) return { ok: true, row_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE board_rows SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
@@ -903,7 +920,8 @@ function bumpBoardRow(section, id, clear = false) {
   if (clear) return updateBoardRow(section, id, { priority: null });
   const m = db.prepare('SELECT MIN(priority) AS mn FROM board_rows WHERE section = ? AND priority IS NOT NULL').get(section);
   const next = (m && m.mn !== null && m.mn !== undefined) ? m.mn - 1 : 0;
-  return updateBoardRow(section, id, { priority: next });
+  // Pinning means "working it now" - it graduates out of the intention queue (v18).
+  return updateBoardRow(section, id, { priority: next, queue_pos: null });
 }
 
 // Move a piece to slot `position` (1-based) within the PINNED band (Dan's "move
@@ -928,6 +946,9 @@ function moveBoardRow(section, id, position) {
   // and will render on-hold (greyed) in its new slot, same as before the move.
   const stmt = db.prepare('UPDATE board_rows SET priority = ? WHERE id = ? AND section = ?');
   pinned.forEach((rid, i) => stmt.run(i + 1, rid, section));
+  // Pinning means "working it now" - the moved row graduates out of the
+  // intention queue (v18); the other pinned rows only got renumbered, not pinned.
+  db.prepare('UPDATE board_rows SET queue_pos = NULL WHERE id = ? AND section = ?').run(id, section);
   return { ok: true, row_id: id, position: idx + 1, pinned_order: pinned };
 }
 
@@ -942,6 +963,37 @@ function holdBoardRow(section, id, reason) {
   const fields = { status: 'on_hold', priority: null };
   if (reason !== undefined && reason !== null) fields.waiting_on = reason;
   return updateBoardRow(section, id, fields);
+}
+
+// ---------------------------------------------------------------------------
+// Order queue (v18) - Dan's declared work order, "order 10, 5, 1". Pure
+// intention: no Jira, no status writes, no slot renumbering. Whole-queue
+// replace: rows not in the list drop out; an empty list clears the queue.
+// ---------------------------------------------------------------------------
+function setBoardOrder(section, rowIds) {
+  const applied = [], skipped = [];
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE board_rows SET queue_pos = NULL WHERE section = ? AND queue_pos IS NOT NULL').run(section);
+    const stmt = db.prepare("UPDATE board_rows SET queue_pos = ? WHERE id = ? AND section = ? AND on_board = 1 AND status != 'done'");
+    let pos = 0;
+    for (const id of (rowIds || [])) {
+      const r = stmt.run(pos + 1, id, section);
+      if (r.changes === 1) { pos++; applied.push(id); } else { skipped.push(id); }
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { ok: true, order: applied, skipped };
+}
+
+// Queue row ids in declared sequence (live, on-board rows only).
+function listOrderQueue(section) {
+  return db.prepare(
+    "SELECT id FROM board_rows WHERE section = ? AND queue_pos IS NOT NULL AND on_board = 1 AND status != 'done' ORDER BY queue_pos ASC, id ASC"
+  ).all(section).map((r) => r.id);
 }
 
 // Release a piece from the holding band back to the normal (auto) order.
@@ -1148,6 +1200,8 @@ module.exports = {
   moveBoardRow,
   holdBoardRow,
   releaseBoardRow,
+  setBoardOrder,
+  listOrderQueue,
   addPendingItem,
   listPending,
   getPending,
