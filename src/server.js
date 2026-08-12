@@ -224,10 +224,18 @@ function slotRow(slot, p, isClosed) {
     + `<td class="last-comment">${p.last_comment ? esc(p.last_comment) : '<span class=\"muted\">—</span>'}</td><td class="age">${boardDaysSince(p.source_date || p.status_changed_at)}</td></tr>`;
 }
 
-function ghostRow(slot, rowId) {
+function ghostRow(slot, rowId, sprintLabel) {
   let dest = 'moved on';
   try {
     const cur = dbMod.getBoardRow(BOARD_SECTION, rowId);
+    // A done row whose sprint was cleared (or still matches this block) did not
+    // MOVE anywhere - it closed. Cross it out in place (obs 980 "free history")
+    // instead of the misleading "→ backlog" ghost. Only a done row that left
+    // for a DIFFERENT sprint still renders as a moved ghost below.
+    const sp = cur ? String(cur.sprint || '').trim() : '';
+    if (cur && cur.on_board && cur.status === 'done' && (!sp || sp === String(sprintLabel || '').trim())) {
+      return slotRow(slot, cur, true);
+    }
     if (!cur) dest = 'removed';
     else if (!cur.on_board) dest = 'off-board';
     else if (cur.sprint) dest = '→ S' + esc(cur.sprint);
@@ -273,7 +281,7 @@ function renderSprintBlock(sprintLabel, group, isActive) {
     if (p) { rowsHtml += slotRow(s.slot, p, false); continue; }
     const c = closedById.get(s.row_id);
     if (c) { rowsHtml += slotRow(s.slot, c, true); continue; }
-    rowsHtml += ghostRow(s.slot, s.row_id);
+    rowsHtml += ghostRow(s.slot, s.row_id, sprintLabel);
   }
   const hdrLabel = 'SPRINT ' + esc(sprintLabel) + (isActive ? ' · ACTIVE' : '');
   return `<tr class="zonehdr ${isActive ? 'zh-active' : 'zh-sprint'}"><td colspan="8">${hdrLabel}</td></tr>` + rowsHtml;
