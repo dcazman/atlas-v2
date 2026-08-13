@@ -520,8 +520,9 @@ function registerTools(server, auth) {
       in_sprint: z.boolean().optional().describe('Mark whether the ticket is in the current active sprint (danfeed maintains this).'),
       sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
       last_comment: z.string().optional().describe('The actual last Jira comment text - live ticket-side truth, kept separate from waiting_on on purpose (obs 1086). This is danfeed\'s field to write (it already polls Jira), not Claude\'s in a chat session - atlas-v2 itself never fetches Jira.'),
+      nickname: z.string().optional().describe('2-4 word slim handle for the ticket in Dan\'s terms ("GCP for Sam") - coined once by the conductor, shown in tight spots instead of the long Jira title. Keep it recognizable to Dan, not a summary.'),
     },
-  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint, sprint, last_comment }) => {
+  }, async ({ section, row_id, title, status, related, waiting_on, in_sprint, sprint, last_comment, nickname }) => {
     const fields = {};
     if (title !== undefined) fields.title = title;
     if (status !== undefined) fields.status = status;
@@ -530,6 +531,7 @@ function registerTools(server, auth) {
     if (in_sprint !== undefined) fields.in_sprint = in_sprint;
     if (sprint !== undefined) fields.sprint = sprint;
     if (last_comment !== undefined) fields.last_comment = last_comment;
+    if (nickname !== undefined) fields.nickname = nickname;
     const r = db.updateBoardRow(section, row_id, fields);
     if (!r.ok) return text(`No board row ${row_id} in ${section}.`);
     return json(r);
@@ -810,6 +812,23 @@ function registerTools(server, auth) {
     if (!r.ok) return text(`No pending item ${pending_id} in ${section}.`);
     db.logEvent(section, `Board: recovered pending #${pending_id} back to the tray`);
     return json({ ok: true, reopened: pending_id });
+  });
+
+  guarded('board_plan_note', {
+    title: 'Write the PLAN read',
+    description:
+      'Write Claude\'s ONE-sentence read of Dan\'s day - the PLAN strip on the board renders it verbatim ' +
+      '(v20, "the board shows conclusions, not inputs"). Written by the conductor each morning and whenever ' +
+      'the day changes shape. Feed it from /api plan.holds (hold decay), the sprint standing, Dan\'s pace ' +
+      '(~2-3 tickets/day), the time of day, and his calendar. One plain sentence in Dan\'s terms, like ' +
+      '"Realistically one more today - suggest 15838 (small); 15634 has sat 12d, worth a look before EOD." ' +
+      'Upsert per section; no history (log_event anything worth remembering).',
+    inputSchema: {
+      section: SECTION,
+      note: z.string().describe('The one-sentence read. Plain, terse, Dan\'s terms - a partner talking, not a report.'),
+    },
+  }, async ({ section, note }) => {
+    return json(db.setPlanNote(section, note));
   });
 
   // -------------------------------------------------------------------------

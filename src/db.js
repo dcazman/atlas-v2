@@ -550,6 +550,23 @@ if (db.prepare('PRAGMA user_version').get().user_version < 19) {
   db.exec('PRAGMA user_version = 19');
 }
 
+// v20: PLAN read + nicknames (Dan, Aug 13 - "the board shows conclusions, not
+// inputs"). plan_notes holds Claude's ONE-sentence read of Dan's day per
+// section (conductor writes it morning + on change; the strip renders it).
+// board_rows.nickname is a 2-4 word slim handle ("GCP for Sam") the conductor
+// coins once per ticket - shown in tight spots instead of the long Jira title.
+if (db.prepare('PRAGMA user_version').get().user_version < 20) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plan_notes (
+      section TEXT PRIMARY KEY CHECK (section IN ('work','personal','shared')),
+      note TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN nickname TEXT'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 20');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -930,6 +947,7 @@ function updateBoardRow(section, id, fields = {}) {
   if (fields.on_board !== undefined) { sets.push('on_board = ?'); vals.push(fields.on_board ? 1 : 0); }
   if (fields.last_comment !== undefined) { sets.push('last_comment = ?'); vals.push(fields.last_comment); }
   if (fields.queue_pos !== undefined) { sets.push('queue_pos = ?'); vals.push(fields.queue_pos); }
+  if (fields.nickname !== undefined) { sets.push('nickname = ?'); vals.push(fields.nickname); }
   // Order-queue auto-drop (v18): closing or offboarding removes the row from
   // Dan's declared queue; the rest keep their relative order. On Hold keeps it.
   if (fields.queue_pos === undefined && (fields.status === 'done' || (fields.on_board !== undefined && !fields.on_board))) {
@@ -1188,6 +1206,19 @@ function updateWorker(section, id, fields = {}) {
   return { ok: true, worker_id: id };
 }
 
+// plan_notes (v20). Claude's one-sentence read of Dan's day, one per section.
+// Upsert-only - there is no history table because the read is a live opinion,
+// not a record; log_event carries anything worth remembering.
+function setPlanNote(section, note) {
+  db.prepare(`INSERT INTO plan_notes (section, note, updated_at) VALUES (?, ?, datetime('now'))
+    ON CONFLICT(section) DO UPDATE SET note = excluded.note, updated_at = datetime('now')`).run(section, note);
+  return { ok: true, section };
+}
+
+function getPlanNote(section) {
+  return db.prepare('SELECT note, updated_at FROM plan_notes WHERE section = ?').get(section) || null;
+}
+
 // research_items (v19). Same VIEW-vs-STORE shape as pending_items: resolved
 // items leave the shelf but are retained. resolved_at is stamped by the
 // research_items_resolve trigger, never written here.
@@ -1271,6 +1302,8 @@ module.exports = {
   getPending,
   resolvePending,
   reopenPending,
+  setPlanNote,
+  getPlanNote,
   addResearchItem,
   listResearch,
   getResearch,

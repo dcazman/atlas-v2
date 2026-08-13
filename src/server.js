@@ -318,7 +318,7 @@ function inProgressStrip(pieces, slotMap) {
     const key = rel[0] || ('#' + p.id);
     const slot = (slotMap.get(p.id) || {}).slot;
     const anchor = rowAnchorId(p.related, p.id);
-    return `<span class="act-item">${slot != null ? `<span class="act-n">${esc(slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
+    return `<span class="act-item">${slot != null ? `<span class="act-n">${esc(slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(key)}</b></a> ${esc(p.nickname || p.title)}</span>`;
   }).join('<span class="act-sep">·</span>');
   return `<div class="activity"><span class="activity-label">IN PROGRESS</span> ${items}</div>`;
 }
@@ -359,6 +359,7 @@ function computePlan(pieces, slotMap) {
       key: parseRelated(p.related)[0] || ('#' + p.id),
       related: p.related,
       title: p.title,
+      nickname: p.nickname || null,
       held_days: daysSinceNum(p.status_changed_at) ?? 0,
       waiting_on: p.waiting_on || null,
     }))
@@ -374,24 +375,21 @@ function computePlan(pieces, slotMap) {
   };
 }
 
+// Render rule (Dan, Aug 13 - "its wordy, sorry dude"): the strip shows a
+// TERSE standing + Claude's one-sentence read of the day (plan_note, written
+// conductor-side). The hold-decay detail (DUE BACK) is deliberately NOT
+// rendered - it's Claude food, served via /api plan.holds only. The board
+// shows conclusions, not inputs.
 function planStrip(pieces, slotMap) {
   const plan = computePlan(pieces, slotMap);
-  const lines = [];
-  if (plan.sprint) {
-    lines.push(`<div class="plan-line"><span class="plan-label" title="The board telling Dan where he stands, recomputed every render. Slice 1: sprint standing + hold decay. Pace math (points vs days left) arrives in slice 2 once the board learns Jira points + sprint dates.">PLAN&nbsp;ⓘ</span>Sprint ${esc(plan.sprint)}: <b>${plan.open} open</b> &mdash; ${plan.in_progress} in progress &middot; ${plan.on_hold} on hold &middot; ${plan.todo} todo &middot; ${plan.closed} closed</div>`);
-  }
-  if (plan.holds.length) {
-    const items = plan.holds.slice(0, 4).map((h) => {
-      const anchor = rowAnchorId(h.related, h.id);
-      const days = `<span class="${h.held_days >= 5 ? 'plan-hot' : 'act-n'}">held ${h.held_days}d</span>`;
-      const wait = h.waiting_on ? ` &mdash; ${esc(String(h.waiting_on).slice(0, 70))}${String(h.waiting_on).length > 70 ? '&hellip;' : ''}` : '';
-      return `<span class="plan-item">${h.slot != null ? `<span class="act-n">${esc(h.slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(h.key)}</b></a> ${days}${wait}</span>`;
-    }).join('<span class="ord-sep">&middot;</span>');
-    const more = plan.holds.length > 4 ? `<span class="act-n"> +${plan.holds.length - 4} more</span>` : '';
-    lines.push(`<div class="plan-line"><span class="plan-label" title="Every on-hold piece and how long it has sat - longest first. Holds decay silently otherwise; this is the go-back tracker.">DUE&nbsp;BACK&nbsp;ⓘ</span>${items}${more}</div>`);
-  }
-  if (!lines.length) return '';
-  return `<div class="planband">${lines.join('')}</div>`;
+  if (!plan.sprint) return '';
+  let note = null;
+  try { note = dbMod.getPlanNote(BOARD_SECTION); } catch (e) {}
+  const standing = `S${esc(plan.sprint)} &middot; ${plan.in_progress} prog &middot; ${plan.on_hold} hold &middot; ${plan.todo} todo`;
+  const read = note && note.note
+    ? `<span class="plan-read">${esc(note.note)}</span><span class="act-n"> (${boardDaysSince(note.updated_at) || '0d'} ago)</span>`
+    : `<span class="act-n">no read yet today</span>`;
+  return `<div class="planband"><div class="plan-line"><span class="plan-label" title="Terse sprint standing + Claude's one-sentence read of the day (written by the conductor via board_plan_note; holds detail feeds it via /api, not shown here).">PLAN&nbsp;ⓘ</span>${standing}<span class="ord-sep">&mdash;</span>${read}</div></div>`;
 }
 
 // ORDER band (v18, board_order tool): Dan's declared work order - pure
@@ -411,7 +409,7 @@ function orderBand(pieces, slotMap) {
     const key = rel[0] || ('#' + p.id);
     const slot = (slotMap.get(p.id) || {}).slot;
     const anchor = rowAnchorId(p.related, p.id);
-    return `<span class="ord-item">${slot != null ? `<span class="act-n">${esc(slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(key)}</b></a> ${esc(p.title)}</span>`;
+    return `<span class="ord-item">${slot != null ? `<span class="act-n">${esc(slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(p.nickname || p.title)}</b></a></span>`;
   }).join('<span class="ord-sep">&rarr;</span>');
   return `<div class="orderband"><span class="orderband-label" title="Dan's declared work order (board_order) - intention only, no Jira, no status change. A piece drops out when pinned, closed, or offboarded.">ORDER&nbsp;ⓘ</span> ${items}</div>`;
 }
@@ -712,7 +710,7 @@ boardApp.get('/api', (req, res) => {
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length, research: research.length },
-    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, queue_pos: p.queue_pos ?? null, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, nickname: p.nickname || null, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, queue_pos: p.queue_pos ?? null, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     // v18 ORDER band (additive field): Dan's declared work order as row ids, queue sequence.
     order: (() => { try { return dbMod.listOrderQueue(BOARD_SECTION); } catch (e) { return []; } })(),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
@@ -725,7 +723,8 @@ boardApp.get('/api', (req, res) => {
       try {
         const all = dbMod.listBoardRows(BOARD_SECTION, true);
         const p = computePlan(all, slotMap);
-        return { ...p, holds: p.holds.map(({ related, ...h }) => h) };
+        const note = dbMod.getPlanNote(BOARD_SECTION);
+        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, holds: p.holds.map(({ related, ...h }) => h) };
       } catch (e) { return null; }
     })(),
     // Board v-next item 4: what moved or closed recently (additive field).
