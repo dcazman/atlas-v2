@@ -501,6 +501,12 @@ function renderBoard() {
   // chance + drift check), so both render on one screen.
   const pieceById = new Map(pieces.map((p) => [p.id, p]));
   const planTabSlotMap = computeSlotMap();
+  // Staleness is shown, never hidden (Dan, Aug 13: a pin landed and the plan
+  // kept saying "nothing pinned" - an old opinion rendered as current). If any
+  // row moved after the plan was written, say so plainly.
+  const planWrittenAt = [planNote && planNote.updated_at, planEntries[0] && planEntries[0].updated_at].filter(Boolean).sort().pop() || null;
+  const boardMovedAt = pieces.map((p) => p.updated_at).filter(Boolean).sort().pop() || null;
+  const planStale = planWrittenAt && boardMovedAt && boardMovedAt > planWrittenAt;
   const planRows = planEntries.map((e) => {
     const p = e.row_id ? pieceById.get(e.row_id) : null;
     const link = p ? (() => {
@@ -618,7 +624,6 @@ function renderBoard() {
   <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
 ${inProgressStrip(live, computeSlotMap())}
-${planStrip(pieces, computeSlotMap())}
 ${orderBand(live, computeSlotMap())}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
@@ -632,7 +637,7 @@ ${orderBand(live, computeSlotMap())}
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="plan" class="panel">
-  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude's ordered take on Dan's day - its own voice, rewritten whenever its read changes. The delta vs Dan's order below is the point: disagreement is a learning chance, not a problem.">Claude thinks ⓘ${planNote && planNote.note ? ` &mdash; <span style="text-transform:none;letter-spacing:0;color:#cfd6e2">${esc(planNote.note)}</span>` : ''}</h3>
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude's ordered take on Dan's day - its own voice, rewritten whenever its read changes. The delta vs Dan's order below is the point: disagreement is a learning chance, not a problem.">Claude thinks ⓘ${planStale ? ' <span style="text-transform:none;letter-spacing:0;color:#fde68a">— board has moved since this was written</span>' : ''}${planNote && planNote.note ? ` &mdash; <span style="text-transform:none;letter-spacing:0;color:#cfd6e2">${esc(planNote.note)}</span>` : ''}</h3>
   ${planRows ? `<table><thead><tr><th>Pos</th><th>Entry</th></tr></thead><tbody>${planRows}</tbody></table>` : `<div class="empty">No plan written yet.</div>`}
   <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Dan's declared order (the ORDER band) - his voice, untouched by Claude.">Dan said</h3>
   ${danOrderRows ? `<table><thead><tr><th>Pos</th><th>Piece</th></tr></thead><tbody>${danOrderRows}</tbody></table>` : `<div class="empty">No declared order.</div>`}
@@ -758,7 +763,9 @@ boardApp.get('/api', (req, res) => {
         const p = computePlan(all, slotMap);
         const note = dbMod.getPlanNote(BOARD_SECTION);
         const entries = dbMod.listPlanEntries(BOARD_SECTION);
-        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
+        const writtenAt = [note && note.updated_at, entries[0] && entries[0].updated_at].filter(Boolean).sort().pop() || null;
+        const movedAt = all.map((r) => r.updated_at).filter(Boolean).sort().pop() || null;
+        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, stale: !!(writtenAt && movedAt && movedAt > writtenAt), entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
       } catch (e) { return null; }
     })(),
     // Board v-next item 4: what moved or closed recently (additive field).
