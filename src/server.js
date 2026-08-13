@@ -323,6 +323,77 @@ function inProgressStrip(pieces, slotMap) {
   return `<div class="activity"><span class="activity-label">IN PROGRESS</span> ${items}</div>`;
 }
 
+// ---- PLAN layer, slice 1 (v20, Dan Aug 13) --------------------------------
+// The board telling Dan where he stands - computed fresh every render from
+// what the board already knows, unlike the ORDER band (his declared intent).
+// Slice 1 = active-sprint standing + hold decay, the "what is tracking that I
+// need to go back?" gap: every on-hold piece with how long it has sat and
+// what it's waiting on, longest-sitting first. NO pace math yet - the board
+// does not hold Jira points or sprint end dates (slice 2: those arrive as
+// data the conductor supplies, and points-vs-days appears here on its own).
+function daysSinceNum(ts) {
+  if (!ts) return null;
+  const iso = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(ts) ? ts.replace(' ', 'T') + 'Z' : ts;
+  const t = new Date(iso);
+  return isNaN(t.getTime()) ? null : Math.floor((Date.now() - t.getTime()) / 86400000);
+}
+
+function computePlan(pieces, slotMap) {
+  const isActive = (id) => /\(active\)$/.test((slotMap.get(id) || {}).block || '');
+  const sprintRows = pieces.filter((p) => isActive(p.id));
+  const open = sprintRows.filter((p) => p.status !== 'done');
+  const count = (s) => open.filter((p) => p.status === s).length;
+  let sprintName = null;
+  if (sprintRows.length) {
+    const m = /^sprint (\S+)/.exec((slotMap.get(sprintRows[0].id) || {}).block || '');
+    sprintName = m ? m[1] : null;
+  }
+  // holds across the whole board, not just the active sprint - a decayed hold
+  // in another block is still a decayed hold.
+  const holds = pieces
+    .filter((p) => p.status === 'on_hold')
+    .map((p) => ({
+      id: p.id,
+      slot: (slotMap.get(p.id) || {}).slot ?? null,
+      block: (slotMap.get(p.id) || {}).block ?? null,
+      key: parseRelated(p.related)[0] || ('#' + p.id),
+      related: p.related,
+      title: p.title,
+      held_days: daysSinceNum(p.status_changed_at) ?? 0,
+      waiting_on: p.waiting_on || null,
+    }))
+    .sort((a, b) => b.held_days - a.held_days);
+  return {
+    sprint: sprintName,
+    open: open.length,
+    in_progress: count('in_progress'),
+    on_hold: count('on_hold'),
+    todo: count('todo'),
+    closed: sprintRows.length - open.length,
+    holds,
+  };
+}
+
+function planStrip(pieces, slotMap) {
+  const plan = computePlan(pieces, slotMap);
+  const lines = [];
+  if (plan.sprint) {
+    lines.push(`<div class="plan-line"><span class="plan-label" title="The board telling Dan where he stands, recomputed every render. Slice 1: sprint standing + hold decay. Pace math (points vs days left) arrives in slice 2 once the board learns Jira points + sprint dates.">PLAN&nbsp;ⓘ</span>Sprint ${esc(plan.sprint)}: <b>${plan.open} open</b> &mdash; ${plan.in_progress} in progress &middot; ${plan.on_hold} on hold &middot; ${plan.todo} todo &middot; ${plan.closed} closed</div>`);
+  }
+  if (plan.holds.length) {
+    const items = plan.holds.slice(0, 4).map((h) => {
+      const anchor = rowAnchorId(h.related, h.id);
+      const days = `<span class="${h.held_days >= 5 ? 'plan-hot' : 'act-n'}">held ${h.held_days}d</span>`;
+      const wait = h.waiting_on ? ` &mdash; ${esc(String(h.waiting_on).slice(0, 70))}${String(h.waiting_on).length > 70 ? '&hellip;' : ''}` : '';
+      return `<span class="plan-item">${h.slot != null ? `<span class="act-n">${esc(h.slot)}.</span> ` : ''}<a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(h.key)}</b></a> ${days}${wait}</span>`;
+    }).join('<span class="ord-sep">&middot;</span>');
+    const more = plan.holds.length > 4 ? `<span class="act-n"> +${plan.holds.length - 4} more</span>` : '';
+    lines.push(`<div class="plan-line"><span class="plan-label" title="Every on-hold piece and how long it has sat - longest first. Holds decay silently otherwise; this is the go-back tracker.">DUE&nbsp;BACK&nbsp;ⓘ</span>${items}${more}</div>`);
+  }
+  if (!lines.length) return '';
+  return `<div class="planband">${lines.join('')}</div>`;
+}
+
 // ORDER band (v18, board_order tool): Dan's declared work order - pure
 // intention. Jira never sees it, statuses and frozen Slot numbers untouched.
 // Renders below the In Progress strip, grey/neutral so it reads as intent, not
@@ -464,6 +535,13 @@ function renderBoard() {
   .act-item a{text-decoration:none}
   .act-item a:hover b{text-decoration:underline}
   .act-sep{color:#3a4150;margin:0 8px}
+  .planband{padding:5px 18px;font-size:12px;color:#9fb0c3;border-bottom:1px solid #222833;background:#0e1320}
+  .plan-line{white-space:nowrap;overflow-x:auto;padding:2px 0}
+  .plan-label{color:#5b6472;letter-spacing:.08em;font-size:10px;margin-right:10px;display:inline-block;min-width:72px}
+  .plan-line b{color:#cfd6e2;font-weight:600}
+  .plan-item a{text-decoration:none}
+  .plan-item a:hover b{text-decoration:underline}
+  .plan-hot{color:#fde68a}
   .orderband{padding:7px 18px;font-size:12px;color:#8b94a3;border-bottom:1px solid #222833;background:#10131a;white-space:nowrap;overflow-x:auto}
   .orderband-label{color:#5b6472;letter-spacing:.08em;font-size:10px;margin-right:10px}
   .ord-item b{color:#9fb0c3;font-weight:600}
@@ -516,6 +594,7 @@ function renderBoard() {
   <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
 ${inProgressStrip(live, computeSlotMap())}
+${planStrip(pieces, computeSlotMap())}
 ${orderBand(live, computeSlotMap())}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
@@ -639,6 +718,16 @@ boardApp.get('/api', (req, res) => {
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
     // v19 research shelf (additive field): Dan's own ideas - undated, unpressured, never nag on age.
     research: research.map((r) => ({ id: r.id, content: r.content, age_days: boardDaysSince(r.created_at) })),
+    // v20 plan slice 1 (additive field): active-sprint standing + hold decay,
+    // computed the same way the view's PLAN strip is. holds are ALL on-hold
+    // pieces, longest-sitting first - the go-back tracker.
+    plan: (() => {
+      try {
+        const all = dbMod.listBoardRows(BOARD_SECTION, true);
+        const p = computePlan(all, slotMap);
+        return { ...p, holds: p.holds.map(({ related, ...h }) => h) };
+      } catch (e) { return null; }
+    })(),
     // Board v-next item 4: what moved or closed recently (additive field).
     activity: activity.map((a) => ({ row_id: a.row_id, title: a.title, related: rel(a.related), kind: a.kind, sprint: a.sprint, at: a.at })),
   });
