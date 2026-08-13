@@ -567,6 +567,28 @@ if (db.prepare('PRAGMA user_version').get().user_version < 20) {
   db.exec('PRAGMA user_version = 20');
 }
 
+// v21: PLAN TAB (Dan, Aug 13). Claude's ordered take on Dan's day - its OWN
+// voice, distinct from Dan's declared ORDER band. Each entry = what + a slim
+// reason ("15634 - sat 12d", "16151 - Josh waiting; J needs to jump in").
+// Whole-list replace on every write (like board_order): the plan is a live
+// opinion, not a log. The VALUE is the delta against Dan's order - when the
+// two disagree, Claude asks why once at groom time and remembers the answer,
+// or gently flags drift. Agreement is noise; the gap is the signal.
+if (db.prepare('PRAGMA user_version').get().user_version < 21) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plan_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      pos INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      row_id INTEGER REFERENCES board_rows(id) ON DELETE SET NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_entries_section ON plan_entries(section, pos);
+  `);
+  db.exec('PRAGMA user_version = 21');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -1219,6 +1241,26 @@ function getPlanNote(section) {
   return db.prepare('SELECT note, updated_at FROM plan_notes WHERE section = ?').get(section) || null;
 }
 
+// plan_entries (v21). Whole-list replace in a transaction - Claude's plan is
+// a live opinion it rewrites when its read changes, not an append log.
+function setPlanEntries(section, entries) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM plan_entries WHERE section = ?').run(section);
+    const ins = db.prepare('INSERT INTO plan_entries (section, pos, text, row_id) VALUES (?, ?, ?, ?)');
+    entries.forEach((e, i) => ins.run(section, i + 1, e.text, e.row_id ?? null));
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { ok: true, count: entries.length };
+}
+
+function listPlanEntries(section) {
+  return db.prepare('SELECT * FROM plan_entries WHERE section = ? ORDER BY pos ASC').all(section);
+}
+
 // research_items (v19). Same VIEW-vs-STORE shape as pending_items: resolved
 // items leave the shelf but are retained. resolved_at is stamped by the
 // research_items_resolve trigger, never written here.
@@ -1304,6 +1346,8 @@ module.exports = {
   reopenPending,
   setPlanNote,
   getPlanNote,
+  setPlanEntries,
+  listPlanEntries,
   addResearchItem,
   listResearch,
   getResearch,

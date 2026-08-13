@@ -420,6 +420,10 @@ function renderBoard() {
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
   try { research = dbMod.listResearch(BOARD_SECTION); } catch (e) {}
+  let planEntries = [], planNote = null, orderIds = [];
+  try { planEntries = dbMod.listPlanEntries(BOARD_SECTION); } catch (e) {}
+  try { planNote = dbMod.getPlanNote(BOARD_SECTION); } catch (e) {}
+  try { orderIds = dbMod.listOrderQueue(BOARD_SECTION); } catch (e) {}
   let workers = [];
   try { workers = dbMod.listWorkers(BOARD_SECTION, true); } catch (e) {}
   const skills = loadSkills();
@@ -492,6 +496,28 @@ function renderBoard() {
   const pendRows = pending.map((p, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
   ).join('');
+  // Plan tab (v21): Claude's ordered take on Dan's day, next to Dan's own
+  // declared order - the delta between the two lists is the point (learning
+  // chance + drift check), so both render on one screen.
+  const pieceById = new Map(pieces.map((p) => [p.id, p]));
+  const planTabSlotMap = computeSlotMap();
+  const planRows = planEntries.map((e) => {
+    const p = e.row_id ? pieceById.get(e.row_id) : null;
+    const link = p ? (() => {
+      const anchor = rowAnchorId(p.related, p.id);
+      const slot = (planTabSlotMap.get(p.id) || {}).slot;
+      return ` <span class="act-n">${slot != null ? slot + '.' : ''}</span> <a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(parseRelated(p.related)[0] || ('#' + p.id))}</b></a>`;
+    })() : '';
+    return `<tr><td class="pos">${e.pos}</td><td>${esc(e.text)}${link}</td></tr>`;
+  }).join('');
+  const danOrderRows = orderIds.map((id, i) => {
+    const p = pieceById.get(id);
+    if (!p) return '';
+    const anchor = rowAnchorId(p.related, p.id);
+    const slot = (planTabSlotMap.get(p.id) || {}).slot;
+    return `<tr><td class="pos">${i + 1}</td><td><span class="act-n">${slot != null ? slot + '.' : ''}</span> <a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(p.nickname || p.title)}</b></a></td></tr>`;
+  }).join('');
+
   // Research shelf (v19): Dan's own ideas, undated and unpressured. Age is
   // shown as plain information - old is NOT a problem on this tab, no styling
   // pressure, no nags. Sitting forever is a valid end state.
@@ -596,6 +622,7 @@ ${planStrip(pieces, computeSlotMap())}
 ${orderBand(live, computeSlotMap())}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
+  <button id="tpl" onclick="show('plan')">Plan (${planEntries.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
   <button id="tres" onclick="show('research')">Research (${research.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
@@ -603,6 +630,12 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <div id="board" class="panel on">
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+</div>
+<div id="plan" class="panel">
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude's ordered take on Dan's day - its own voice, rewritten whenever its read changes. The delta vs Dan's order below is the point: disagreement is a learning chance, not a problem.">Claude thinks ⓘ${planNote && planNote.note ? ` &mdash; <span style="text-transform:none;letter-spacing:0;color:#cfd6e2">${esc(planNote.note)}</span>` : ''}</h3>
+  ${planRows ? `<table><thead><tr><th>Pos</th><th>Entry</th></tr></thead><tbody>${planRows}</tbody></table>` : `<div class="empty">No plan written yet.</div>`}
+  <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Dan's declared order (the ORDER band) - his voice, untouched by Claude.">Dan said</h3>
+  ${danOrderRows ? `<table><thead><tr><th>Pos</th><th>Piece</th></tr></thead><tbody>${danOrderRows}</tbody></table>` : `<div class="empty">No declared order.</div>`}
 </div>
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
@@ -621,8 +654,8 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
-function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
+function show(w){for(const [id,name] of [['board','tb'],['plan','tpl'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='plan'||t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
 // Board tab while a different tab is active - a plain #anchor can't scroll to
 // something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).
@@ -724,7 +757,8 @@ boardApp.get('/api', (req, res) => {
         const all = dbMod.listBoardRows(BOARD_SECTION, true);
         const p = computePlan(all, slotMap);
         const note = dbMod.getPlanNote(BOARD_SECTION);
-        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, holds: p.holds.map(({ related, ...h }) => h) };
+        const entries = dbMod.listPlanEntries(BOARD_SECTION);
+        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
       } catch (e) { return null; }
     })(),
     // Board v-next item 4: what moved or closed recently (additive field).

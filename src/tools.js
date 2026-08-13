@@ -831,6 +831,27 @@ function registerTools(server, auth) {
     return json(db.setPlanNote(section, note));
   });
 
+  guarded('board_plan_set', {
+    title: 'Write the Plan tab',
+    description:
+      'Replace Claude\'s ordered take on Dan\'s day - the Plan tab renders it (v21). Claude\'s OWN voice, ' +
+      'distinct from Dan\'s declared ORDER band. Each entry: what + a slim reason in a few words ' +
+      '("15634 - sat 12d", "16151 - Josh waiting; J needs to jump in, mention it"). Whole-list replace; ' +
+      'rewrite whenever the read changes (morning, after a close, after new info). Feed it from /api ' +
+      'plan.holds, sprint standing, Dan\'s pace (~2-3 tickets/day), time of day, calendar. THE POINT: ' +
+      'the delta vs Dan\'s order is a learning chance - when the lists disagree, ask Dan why once at groom ' +
+      'time and remember the answer, or gently flag drift. Never nag.',
+    inputSchema: {
+      section: SECTION,
+      entries: z.array(z.object({
+        text: z.string().describe('The entry: what + slim reason, terse, Dan\'s terms.'),
+        row_id: z.number().int().optional().describe('Board row id this entry points at, if any (gives the view a jump link).'),
+      })).describe('The full ordered list, first = do first. Empty array clears the plan.'),
+    },
+  }, async ({ section, entries }) => {
+    return json(db.setPlanEntries(section, entries));
+  });
+
   // -------------------------------------------------------------------------
   // RESEARCH SHELF (v19, Dan Aug 13). Dan's OWN ideas and loose threads - not
   // yet work, may never be. Tray = external inbound; research = internal.
