@@ -351,7 +351,7 @@ function renderBoard() {
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
   let workers = [];
-  try { workers = dbMod.listWorkers(BOARD_SECTION, false); } catch (e) {}
+  try { workers = dbMod.listWorkers(BOARD_SECTION, true); } catch (e) {}
   const skills = loadSkills();
   const live = pieces.filter((p) => p.status !== 'done');
   const closed = pieces.filter((p) => p.status === 'done');
@@ -425,10 +425,14 @@ function renderBoard() {
   const remRows = reminders.map((r, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${r.id}</td><td>${esc(r.content)}</td><td class="sp">${esc(r.trigger_date || '')}${r.trigger_time ? ' ' + esc(r.trigger_time) : ''}</td><td class="src">${esc(r.entity || '')}</td><td class="age">${boardDaysSince(r.created_at)}</td></tr>`
   ).join('');
-  const workerRows = workers.map((w) => {
+  // Done workers stay on the tab (greyed, after the live ones) — same pattern
+  // as closed board rows crossing out in place instead of vanishing.
+  const liveWorkers = workers.filter((w) => w.status !== 'done');
+  const doneWorkers = workers.filter((w) => w.status === 'done');
+  const workerRows = [...liveWorkers, ...doneWorkers].map((w) => {
     const rel = parseRelated(w.related);
     const tickets = rel.length ? rel.map((k) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(k)}" target="_blank" rel="noopener">${esc(k)}</a>`).join('<br>') : '';
-    return `<tr><td>${esc(w.name)}</td><td>${workerBadge(w.status)}</td><td class="tk">${tickets}</td><td>${esc(w.title)}</td><td class="id">${w.obs_id ?? ''}</td><td class="age">${boardDaysSince(w.updated_at)}</td></tr>`;
+    return `<tr${w.status === 'done' ? ' class="closed"' : ''}><td>${esc(w.name)}</td><td>${workerBadge(w.status)}</td><td class="tk">${tickets}</td><td>${esc(w.title)}</td><td class="id">${w.obs_id ?? ''}</td><td class="age">${boardDaysSince(w.updated_at)}</td></tr>`;
   }).join('');
   const skillRows = skills.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.description)}</td></tr>`).join('');
 
@@ -510,7 +514,7 @@ ${orderBand(live, computeSlotMap())}
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
-  <button id="tw" onclick="show('workers')">Workers (${workers.length})</button>
+  <button id="tw" onclick="show('workers')">Workers (${liveWorkers.length})</button>
 </div>
 <div id="board" class="panel on">
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
@@ -522,8 +526,8 @@ ${orderBand(live, computeSlotMap())}
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
 </div>
 <div id="workers" class="panel">
-  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Active Workers</h3>
-  ${workerRows ? `<table><thead><tr><th>Name</th><th>Status</th><th>Ticket(s)</th><th>Task</th><th>Obs&nbsp;#</th><th>Age</th></tr></thead><tbody>${workerRows}</tbody></table>` : `<div class="empty">No active workers.</div>`}
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Workers</h3>
+  ${workerRows ? `<table><thead><tr><th>Name</th><th>Status</th><th>Ticket(s)</th><th>Task</th><th>Obs&nbsp;#</th><th>Age</th></tr></thead><tbody>${workerRows}</tbody></table>` : `<div class="empty">No workers.</div>`}
   <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Skills Directory</h3>
   ${skillRows ? `<table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>${skillRows}</tbody></table>` : `<div class="empty">No skills found.</div>`}
 </div>
