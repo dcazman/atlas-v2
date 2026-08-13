@@ -521,6 +521,35 @@ if (db.prepare('PRAGMA user_version').get().user_version < 18) {
   db.exec('PRAGMA user_version = 18');
 }
 
+// v19: RESEARCH SHELF (Dan, Aug 13). His OWN ideas and loose threads - not yet
+// work, may never be. Distinct from the tray by SOURCE: tray = external inbound
+// (Slack/Jira/email pushing at Dan, ~40% becomes work), research = internal
+// (Dan's head, ~20%). Undated and unpressured by design: no due dates, no aging
+// nags - sitting indefinitely is a valid end state. Three exits, each leaving a
+// trace: promoted (graduates to the tray, then normal tray flows take it to the
+// board), dead (killed with a reason), or open forever. Swept gently at groom
+// time only - never surfaced in the agenda.
+if (db.prepare('PRAGMA user_version').get().user_version < 19) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS research_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      content TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','promoted','dead')),
+      promoted_to INTEGER,
+      resolution_note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_research_section_state ON research_items(section, state);
+    CREATE TRIGGER IF NOT EXISTS research_items_resolve
+      AFTER UPDATE OF state ON research_items FOR EACH ROW
+      WHEN OLD.state = 'open' AND NEW.state <> 'open'
+      BEGIN UPDATE research_items SET resolved_at = datetime('now') WHERE id = NEW.id; END;
+  `);
+  db.exec('PRAGMA user_version = 19');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -1159,6 +1188,41 @@ function updateWorker(section, id, fields = {}) {
   return { ok: true, worker_id: id };
 }
 
+// research_items (v19). Same VIEW-vs-STORE shape as pending_items: resolved
+// items leave the shelf but are retained. resolved_at is stamped by the
+// research_items_resolve trigger, never written here.
+function addResearchItem(section, content) {
+  const info = db.prepare('INSERT INTO research_items (section, content) VALUES (?, ?)').run(section, content);
+  return { research_id: info.lastInsertRowid };
+}
+
+function listResearch(section) {
+  return db.prepare(
+    "SELECT * FROM research_items WHERE section = ? AND state = 'open' ORDER BY created_at ASC, id ASC"
+  ).all(section);
+}
+
+function getResearch(section, id) {
+  return db.prepare('SELECT * FROM research_items WHERE id = ? AND section = ?').get(id, section);
+}
+
+function resolveResearch(section, id, newState, { promoted_to = null, resolution_note = null } = {}) {
+  const r = getResearch(section, id);
+  if (!r) return { ok: false, reason: 'not_found' };
+  if (r.state !== 'open') return { ok: false, reason: 'already_resolved', state: r.state };
+  db.prepare('UPDATE research_items SET state = ?, promoted_to = ?, resolution_note = ? WHERE id = ?')
+    .run(newState, promoted_to, resolution_note, id);
+  return { ok: true, research_id: id, state: newState };
+}
+
+// Recover a resolved (promoted/dead) research item back to open.
+function reopenResearch(section, id) {
+  const r = getResearch(section, id);
+  if (!r) return { ok: false, reason: 'not_found' };
+  db.prepare("UPDATE research_items SET state = 'open', resolution_note = NULL, resolved_at = NULL, promoted_to = NULL WHERE id = ?").run(id);
+  return { ok: true, research_id: id };
+}
+
 // Retire a worker the sanctioned way - status=done (kept forever, same
 // VIEW-vs-STORE spirit as the rest of this file; no delete tool for workers).
 function closeWorker(section, id) {
@@ -1207,6 +1271,11 @@ module.exports = {
   getPending,
   resolvePending,
   reopenPending,
+  addResearchItem,
+  listResearch,
+  getResearch,
+  resolveResearch,
+  reopenResearch,
   ensureSprintSlots,
   getSprintSlots,
   getSlotHistoryForRow,

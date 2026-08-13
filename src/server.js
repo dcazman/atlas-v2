@@ -346,10 +346,11 @@ function orderBand(pieces, slotMap) {
 }
 
 function renderBoard() {
-  let pieces = [], pending = [], reminders = [];
+  let pieces = [], pending = [], reminders = [], research = [];
   try { pieces = dbMod.listBoardRows(BOARD_SECTION, true); } catch (e) { /* render empty on error */ }
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
+  try { research = dbMod.listResearch(BOARD_SECTION); } catch (e) {}
   let workers = [];
   try { workers = dbMod.listWorkers(BOARD_SECTION, true); } catch (e) {}
   const skills = loadSkills();
@@ -421,6 +422,12 @@ function renderBoard() {
 
   const pendRows = pending.map((p, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
+  ).join('');
+  // Research shelf (v19): Dan's own ideas, undated and unpressured. Age is
+  // shown as plain information - old is NOT a problem on this tab, no styling
+  // pressure, no nags. Sitting forever is a valid end state.
+  const resRows = research.map((r, i) =>
+    `<tr><td class="pos">${i + 1}</td><td class="id">${r.id}</td><td>${esc(r.content)}</td><td class="age">${boardDaysSince(r.created_at)}</td></tr>`
   ).join('');
   const remRows = reminders.map((r, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${r.id}</td><td>${esc(r.content)}</td><td class="sp">${esc(r.trigger_date || '')}${r.trigger_time ? ' ' + esc(r.trigger_time) : ''}</td><td class="src">${esc(r.entity || '')}</td><td class="age">${boardDaysSince(r.created_at)}</td></tr>`
@@ -513,6 +520,7 @@ ${orderBand(live, computeSlotMap())}
 <div class="tabs">
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
+  <button id="tres" onclick="show('research')">Research (${research.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
   <button id="tw" onclick="show('workers')">Workers (${liveWorkers.length})</button>
 </div>
@@ -521,6 +529,9 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
+</div>
+<div id="research" class="panel">
+  ${research.length ? `<table><thead><tr><th>Pos</th><th>#</th><th title="Dan's own ideas and loose threads - not yet work, may never be. No dates, no pressure; sitting forever is fine. Exits: graduate to the tray, get killed, or stay.">Idea&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${resRows}</tbody></table>` : `<div class="empty">Shelf empty. Research items are Dan's own ideas and loose threads - not yet work, no dates, no pressure.</div>`}
 </div>
 <div id="reminders" class="panel">
   ${reminders.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Reminder</th><th>When</th><th>Topic</th><th>Age</th></tr></thead><tbody>${remRows}</tbody></table>` : `<div class="empty">No reminders.</div>`}
@@ -533,8 +544,8 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
-function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
+function show(w){for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
 // Board tab while a different tab is active - a plain #anchor can't scroll to
 // something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).
@@ -611,20 +622,23 @@ boardApp.get('/health', (req, res) => res.json({ ok: true, service: 'atlas-board
 // JSON feed of the board — what the SessionStart hook curls to inject the live
 // board into Claude's context deterministically at every chat start. LAN, no auth.
 boardApp.get('/api', (req, res) => {
-  let pieces = [], pending = [], activity = [];
+  let pieces = [], pending = [], activity = [], research = [];
   try { pieces = dbMod.listBoardRows(BOARD_SECTION, false); } catch (e) {}
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { activity = dbMod.recentActivity(BOARD_SECTION, 7); } catch (e) {}
+  try { research = dbMod.listResearch(BOARD_SECTION); } catch (e) {}
   const rel = (r) => { try { return JSON.parse(r); } catch (e) { return [r]; } };
   const slotMap = computeSlotMap();
   res.json({
     as_of: boardStamp(),
     section: BOARD_SECTION,
-    counts: { pieces: pieces.length, pending: pending.length },
+    counts: { pieces: pieces.length, pending: pending.length, research: research.length },
     pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, queue_pos: p.queue_pos ?? null, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     // v18 ORDER band (additive field): Dan's declared work order as row ids, queue sequence.
     order: (() => { try { return dbMod.listOrderQueue(BOARD_SECTION); } catch (e) { return []; } })(),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),
+    // v19 research shelf (additive field): Dan's own ideas - undated, unpressured, never nag on age.
+    research: research.map((r) => ({ id: r.id, content: r.content, age_days: boardDaysSince(r.created_at) })),
     // Board v-next item 4: what moved or closed recently (additive field).
     activity: activity.map((a) => ({ row_id: a.row_id, title: a.title, related: rel(a.related), kind: a.kind, sprint: a.sprint, at: a.at })),
   });

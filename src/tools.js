@@ -813,6 +813,91 @@ function registerTools(server, auth) {
   });
 
   // -------------------------------------------------------------------------
+  // RESEARCH SHELF (v19, Dan Aug 13). Dan's OWN ideas and loose threads - not
+  // yet work, may never be. Tray = external inbound; research = internal.
+  // Undated and unpressured: no due dates, no nags, sitting forever is valid.
+  // Exits: promote (graduates to the tray -> normal tray flows), kill (with a
+  // reason), or stay open. Swept gently at groom time only, never the agenda.
+  // -------------------------------------------------------------------------
+  guarded('research_add', {
+    title: 'Add research item',
+    description:
+      'Put one of Dan\'s own ideas / loose threads on the research shelf - something that is not yet work ' +
+      'and may never be ("apple - might be important"). Capture is classification-free and zero-commitment: ' +
+      'one line, no date, no bucket. Use when Dan says "remind me to think about X", drops a sidebar idea, ' +
+      'or flags fun/if-I-get-time work. External inbound (Slack/Jira/email) goes to the TRAY instead.',
+    inputSchema: {
+      section: SECTION,
+      content: z.string().describe('One line: the idea/thread, in Dan\'s terms.'),
+    },
+  }, async ({ section, content }) => {
+    return json(db.addResearchItem(section, content));
+  });
+
+  guarded('research_list', {
+    title: 'List research shelf',
+    description:
+      'List open research items for a section, oldest first, with age. Resolved (promoted/dead) items are ' +
+      'hidden but retained. Age is informational only - old is NOT a problem here; never nag about it. ' +
+      'At groom time, gently ask Dan about the two or three oldest ("still an apple?") - keep/kill/promote.',
+    inputSchema: { section: SECTION },
+  }, async ({ section }) => {
+    return json(db.listResearch(section).map((r) => ({ ...r, age_days: ageDays(r.created_at) })));
+  });
+
+  guarded('research_promote', {
+    title: 'Promote research item to the tray',
+    description:
+      'Graduate a research item: it has become real enough to triage. Creates a tray (pending) item from it; ' +
+      'normal tray flows (pending_promote with a ticket, pending_merge) take it to the board from there. ' +
+      'The research item is retained, linked to the tray item. Propose to Dan; run only on his confirm.',
+    inputSchema: {
+      section: SECTION,
+      research_id: z.number().int(),
+    },
+  }, async ({ section, research_id }) => {
+    const r = db.getResearch(section, research_id);
+    if (!r) return text(`No research item ${research_id} in ${section}.`);
+    if (r.state !== 'open') return text(`Research ${research_id} already ${r.state}.`);
+    const { pending_id } = db.addPendingItem(section, r.content, { source: 'manual', source_date: r.created_at });
+    db.resolveResearch(section, research_id, 'promoted', { promoted_to: pending_id });
+    db.logEvent(section, `Board: research #${research_id} graduated to tray #${pending_id} - ${r.content}`);
+    return json({ ok: true, promoted: research_id, pending_id });
+  });
+
+  guarded('research_kill', {
+    title: 'Kill research item',
+    description:
+      'Drop a research item - it stopped mattering. Retained with the reason, logged, never silently ' +
+      'deleted. Only on Dan\'s word; an idea sitting untouched for months is NOT a reason to kill it.',
+    inputSchema: {
+      section: SECTION,
+      research_id: z.number().int(),
+      reason: z.string().describe('Why it no longer matters.'),
+    },
+  }, async ({ section, research_id, reason }) => {
+    const r = db.getResearch(section, research_id);
+    if (!r) return text(`No research item ${research_id} in ${section}.`);
+    if (r.state !== 'open') return text(`Research ${research_id} already ${r.state}.`);
+    db.resolveResearch(section, research_id, 'dead', { resolution_note: reason });
+    db.logEvent(section, `Board: killed research #${research_id} - ${reason}`);
+    return json({ ok: true, killed: research_id });
+  });
+
+  guarded('research_reopen', {
+    title: 'Recover a resolved research item',
+    description:
+      'Bring a promoted/killed research item back to the open shelf - for fixing a wrong call. ' +
+      'The item was retained in the store; this reopens it.',
+    inputSchema: { section: SECTION, research_id: z.number().int() },
+  }, async ({ section, research_id }) => {
+    const r = db.reopenResearch(section, research_id);
+    if (!r.ok) return text(`No research item ${research_id} in ${section}.`);
+    db.logEvent(section, `Board: recovered research #${research_id} back to the shelf`);
+    return json({ ok: true, reopened: research_id });
+  });
+
+  // -------------------------------------------------------------------------
   // WORKERS (see /worker skill). Structured record for a spawned worker thread
   // scoped to one board piece - name, status, tied ticket(s)/board row, task,
   // and the Atlas obs it reports live progress to. Replaces the old approach
