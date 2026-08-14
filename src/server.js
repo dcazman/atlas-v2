@@ -581,6 +581,8 @@ function renderBoard() {
   .tabs{display:flex;gap:6px;padding:12px 18px 0}
   .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
   .tabs button.on{background:#232a36;color:#fff}
+  .tabs .jumpbtn{padding:7px 10px;color:#8b94a3;border-radius:8px 8px 0 0}
+  .tabs .jumpbtn:hover{color:#fff}
   .panel{display:none;padding:0 18px 24px}
   .panel.on{display:block}
   table{width:100%;border-collapse:collapse;margin-top:8px}
@@ -631,6 +633,8 @@ function renderBoard() {
 ${inProgressStrip(live, computeSlotMap())}
 ${orderBand(live, computeSlotMap())}
 <div class="tabs">
+  <button class="jumpbtn" title="Jump to top" onclick="window.scrollTo({top:0})">&uarr;</button>
+  <button class="jumpbtn" title="Jump to bottom" onclick="window.scrollTo({top:document.body.scrollHeight})">&darr;</button>
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
   <button id="tpl" onclick="show('plan')">Plan (${planEntries.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
@@ -668,8 +672,19 @@ ${orderBand(live, computeSlotMap())}
 function setStickyH(){var s=document.getElementById('stickytop');if(s)document.documentElement.style.setProperty('--stickyh',s.offsetHeight+'px');}
 window.addEventListener('resize',setStickyH);
 setStickyH();
-function show(w){for(const [id,name] of [['board','tb'],['plan','tpl'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='plan'||t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
+// Per-tab scroll memory (Dan, Aug 14): leaving a tab remembers where you were
+// in it; coming back puts you right back there ("I was at board 6"). Kept in
+// sessionStorage so the 30s auto-reload doesn't wipe it; the ACTIVE tab's spot
+// across reloads is the browser's own scroll restoration, untouched here.
+var curTab='board';try{curTab=localStorage.getItem('atlasTab')||'board';}catch(e){}
+var scrollMap={};try{scrollMap=JSON.parse(sessionStorage.getItem('atlasScroll')||'{}');}catch(e){}
+function show(w,init){
+  if(!init){scrollMap[curTab]=window.scrollY;try{sessionStorage.setItem('atlasScroll',JSON.stringify(scrollMap));}catch(e){}}
+  for(const [id,name] of [['board','tb'],['plan','tpl'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
+  try{localStorage.setItem('atlasTab',w);}catch(e){}
+  if(!init){curTab=w;window.scrollTo(0,scrollMap[w]||0);}
+}
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='plan'||t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t,true);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
 // Board tab while a different tab is active - a plain #anchor can't scroll to
 // something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).
