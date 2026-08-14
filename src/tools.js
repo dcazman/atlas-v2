@@ -469,9 +469,10 @@ function registerTools(server, auth) {
       source_date: z.string().optional().describe('The ticket real date (e.g. Jira created, ISO) so board age reflects true ticket age, not time-on-board.'),
       in_sprint: z.boolean().optional().describe('True if the ticket is in the current active sprint (drives current-sprint-first ordering). danfeed supplies this.'),
       sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
+      nickname: z.string().describe('REQUIRED at birth (Dan Aug 14 - pieces are born complete, naming is never a separate task): a 2-4 word handle in Dan\'s terms ("GCP folders", "DMARC sp= fix") shown in strips/bands instead of the long title. Coin it from the ticket in the same breath as boarding it.'),
     },
-  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint, sprint }) => {
-    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0, sprint }));
+  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname }) => {
+    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0, sprint, nickname }));
   });
 
   guarded('board_list', {
@@ -771,12 +772,13 @@ function registerTools(server, auth) {
       related: z.array(z.string()).min(1).describe('One or more ticket numbers - required.'),
       status: BOARD_STATUS.optional(),
       waiting_on: z.string().optional(),
+      nickname: z.string().describe('REQUIRED at birth (Dan Aug 14 - pieces are born complete): a 2-4 word handle in Dan\'s terms, coined in the same breath as promoting.'),
     },
-  }, async ({ section, pending_id, title, related, status, waiting_on }) => {
+  }, async ({ section, pending_id, title, related, status, waiting_on, nickname }) => {
     const p = db.getPending(section, pending_id);
     if (!p) return text(`No pending item ${pending_id} in ${section}.`);
     if (p.state !== 'pending') return text(`Pending ${pending_id} already ${p.state}.`);
-    const { row_id } = db.addBoardRow(section, title, { related, status, waiting_on, source_date: p.source_date });
+    const { row_id } = db.addBoardRow(section, title, { related, status, waiting_on, source_date: p.source_date, nickname });
     db.resolvePending(section, pending_id, 'promoted', { merged_into: row_id });
     db.logEvent(section, `Board: promoted pending #${pending_id} (${p.source}${p.source_ref ? ' ' + p.source_ref : ''}) to new piece #${row_id} ${JSON.stringify(related)} - ${title}`);
     return json({ ok: true, promoted: pending_id, new_piece: row_id });

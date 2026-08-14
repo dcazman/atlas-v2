@@ -932,9 +932,9 @@ function addBoardRow(section, title, opts = {}) {
     throw new Error('board membership: the primary ticket must be PCT- or GSSD- (Dan is tracked in PCT/GSSD). ' + primary + ' is a driver (INFRA/CHANGE/PIRISK/SECARCH/etc.) and belongs in a needs-a-story state, not a board piece.');
   }
   const info = db.prepare(
-    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint)
-     VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?)`
-  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null, opts.sprint ?? null);
+    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname)
+     VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?, ?)`
+  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null, opts.sprint ?? null, opts.nickname ?? null);
   return { row_id: info.lastInsertRowid };
 }
 
