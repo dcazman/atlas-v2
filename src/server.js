@@ -585,7 +585,11 @@ function renderBoard() {
   .panel.on{display:block}
   table{width:100%;border-collapse:collapse;margin-top:8px}
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #222833;vertical-align:top}
-  th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;background:#0f1115;z-index:5;box-shadow:inset 0 -1px 0 #222833}
+  th{color:#8b94a3;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:var(--stickyh,0px);background:#0f1115;z-index:5;box-shadow:inset 0 -1px 0 #222833}
+  /* Follow-me controls (Dan, Aug 14): strips + tab row ride along while the
+     long board scrolls, so jumping row->pin->worker never means scrolling back
+     to the top. Column headers stick just below them (--stickyh, JS-measured). */
+  .stickytop{position:sticky;top:0;z-index:20;background:#0f1115;box-shadow:0 1px 0 #2a2f3a}
   td.id{color:#6b7280;font-variant-numeric:tabular-nums;width:38px}
   td.pos{color:#e6e6e6;font-variant-numeric:tabular-nums;width:30px}
   td.pos.num-grey{color:#e6e6e6}
@@ -623,6 +627,7 @@ function renderBoard() {
   <span class="meta">as of ${esc(boardStamp())}</span>
   <span class="meta">${live.length} live pieces &middot; ${pending.length} pending</span>
 </header>
+<div id="stickytop" class="stickytop">
 ${inProgressStrip(live, computeSlotMap())}
 ${orderBand(live, computeSlotMap())}
 <div class="tabs">
@@ -632,6 +637,7 @@ ${orderBand(live, computeSlotMap())}
   <button id="tres" onclick="show('research')">Research (${research.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
   <button id="tw" onclick="show('workers')">Workers (${liveWorkers.length})</button>
+</div>
 </div>
 <div id="board" class="panel on">
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
@@ -659,6 +665,9 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
+function setStickyH(){var s=document.getElementById('stickytop');if(s)document.documentElement.style.setProperty('--stickyh',s.offsetHeight+'px');}
+window.addEventListener('resize',setStickyH);
+setStickyH();
 function show(w){for(const [id,name] of [['board','tb'],['plan','tpl'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}try{localStorage.setItem('atlasTab',w);}catch(e){}}
 (function(){try{var t=localStorage.getItem('atlasTab');if(t==='plan'||t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
