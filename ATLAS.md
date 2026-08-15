@@ -55,7 +55,7 @@ stays in its own section.
 | `remove_observation(section, observation_id)` | Delete a stale/wrong fact. |
 | `log_event(section, content, entity?)` | Append to history log. |
 | `get_history(section, limit?, entity?)` | Recent history entries. |
-| `search(section, query)` | Keyword search across entities, observations, events. |
+| `search(section, query)` | Hybrid keyword + semantic search across entities, observations, events. Observation results tagged `match: "keyword"` or `"semantic"` (semantic hits carry a `score`). Semantic pass degrades silently to keyword-only if unavailable. Upgraded 2026-08-15 - see README.md "Hybrid search / RAG". |
 | `create_reminder(section, content, trigger_date, entity?)` | Create a reminder that surfaces in `get_landscape` on/after `trigger_date` (YYYY-MM-DD). |
 | `list_reminders(section, include_dismissed?)` | List reminders, including not-yet-due or dismissed ones (`get_landscape` only shows due ones). |
 | `list_due_reminders(section)` | Everything currently due and not dismissed: date-only reminders (trigger_date arrived, ET) — these stay due until dismissed — plus timed reminders (trigger_time set) whose ET date+time has arrived and that have not yet fired. danfeed polls this and DMs only the timed rows. |
