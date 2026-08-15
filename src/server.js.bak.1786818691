@@ -128,18 +128,7 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-app.listen(PORT, () => {
-  console.log('atlas-mcp v2 running on port ' + PORT);
-  // Boot-time embedding backfill sweep (RAG design, obs 1304/1306, shared).
-  // Non-blocking, best-effort: covers observations written before this
-  // deploy plus anything that failed to embed inline. Delayed slightly so
-  // the model pipeline isn't racing the very first request.
-  setTimeout(() => {
-    dbMod.backfillMissingEmbeddings().catch((err) => {
-      console.error('startup embedding backfill failed:', err.message);
-    });
-  }, 5000);
-});
+app.listen(PORT, () => console.log('atlas-mcp v2 running on port ' + PORT));
 
 // ---------------------------------------------------------------------------
 // READ-ONLY BOARD VIEW (PCT-15801 Phase 2, item 4). A plain HTTP page on its

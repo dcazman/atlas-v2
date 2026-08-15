@@ -406,3 +406,63 @@ way to tell it had gone stale.
   review this week" style), stricter than the normal hold-comment rule.
 
 *Board v-next shipped by the c-board worker thread, 2026-08-10.*
+
+# Hybrid search / RAG — SHIPPED (2026-08-15)
+
+Design agreed by work-Claude (obs 1304) and reviewed/approved on the
+personal side (obs 1306), both on the shared entity "Atlas RAG / Semantic
+Search (Design)". Built and deployed same day.
+
+**What it is:** the existing `search` tool is now hybrid keyword + semantic.
+Every observation write is embedded in-process (no change to callers, no new
+tool). Results are merged/deduped and each observation is tagged
+`match: "keyword"` or `match: "semantic"` (semantic hits also carry a
+`score`).
+
+**Stack:**
+- `src/embeddings.js` — `@huggingface/transformers`, model
+  `Xenova/all-MiniLM-L6-v2` (384-dim), lazy-loaded pipeline, mean-pooled +
+  L2-normalized so cosine similarity = plain dot product.
+- New `embeddings` table (`obs_id` PK, `vector` BLOB, `model`,
+  `embedded_at`) — separate table, not a column, so a future model change is
+  a table wipe, not a migration.
+- `addObservation` fires an async, best-effort embed after every insert.
+  Never blocks or throws on the write path — a failed embed just leaves the
+  row uncovered until the next sweep.
+- `backfillMissingEmbeddings()` runs 5s after server boot, sweeps any
+  observation without an `embeddings` row (new failures + the one-time
+  backfill of pre-existing data). Idempotent, safe to run repeatedly.
+- `db.hybridSearch(section, query)` — keyword pass unchanged, plus a
+  brute-force cosine pass over that section's embedded observations
+  (`minScore` 0.35, top 8). Degrades silently to keyword-only if the
+  semantic pass throws for any reason (model not loaded, nothing embedded
+  yet, etc.) — `search` never fails because of this.
+
+**Deploy notes / real gotchas hit along the way:**
+- `onnxruntime-node`'s prebuilt binary needs real glibc. The base image was
+  `node:22-alpine` (musl) — first build failed outright (missing
+  `ld-linux-x86-64.so.2`). Adding `gcompat` got past that but then failed on
+  unresolved fortify symbols (`__vsnprintf_chk`) — gcompat's shim doesn't
+  cover those. Fix: switched base image to **`node:22-slim`** (Debian,
+  glibc). This is now a real dependency of the RAG feature, not a style
+  choice — don't revert to Alpine without re-solving this.
+- Model is prefetched at **build time** (`scripts/prefetch-model.js`, run
+  during `docker build`, baked into `./models`) so the running container
+  never calls out to HuggingFace. `env.allowRemoteModels = false` at
+  runtime enforces this.
+- One-time backfill of pre-existing observations ran automatically on first
+  boot after deploy: **366 embedded**, completed within seconds of boot, no
+  manual step needed.
+- Rollback path: previous image tagged `dcazman/atlas:pre-rag-rollback`
+  before rebuild. Schema change is additive-only (new table, nothing
+  altered/dropped), so rollback is a straight image swap with no data
+  migration needed either direction.
+- Verified live post-deploy with a real query with zero keyword overlap
+  against the actual note text ("indoor growing without soil" → matched
+  observations mentioning "Dutch bucket system", "hydroponic", "aeroponic"
+  etc., scores 0.40–0.44, tagged `match: "semantic"`).
+
+*Shipped 2026-08-15, personal-side session, with Anchor-MCP direct access to
+the Unraid host (build, test container, live deploy). Scope: observations
+only (v1, as designed) — entities/events/board rows can join later per the
+original design.*

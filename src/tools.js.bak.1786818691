@@ -313,18 +313,15 @@ function registerTools(server, auth) {
   guarded('search', {
     title: 'Search',
     description:
-      'Search entities, observations, and history events for a keyword or phrase. Hybrid: ' +
-      'combines exact keyword matching with semantic similarity over observation embeddings, ' +
-      'merged and deduped (each observation is tagged match: "keyword" or "semantic"). Falls ' +
-      'back to keyword-only if semantic search is not available. Use when you need to find ' +
-      'something but do not know the exact entity name or wording. Observation results include ' +
+      'Search entities, observations, and history events for a keyword. Use when you need ' +
+      'to find something but do not know the exact entity name. Observation results include ' +
       'their ids - usable directly with get_observation and obs-number handoffs.',
     inputSchema: {
       section: SECTION,
       query: z.string().describe('Keyword or phrase to search for.'),
     },
   }, async ({ section, query }) => {
-    return json(await db.hybridSearch(section, query));
+    return json(db.search(section, query));
   });
 
   guarded('create_reminder', {

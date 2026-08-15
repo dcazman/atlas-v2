@@ -235,17 +235,6 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  -- Separate table (not a column) so a future model change is a table wipe,
-  -- not a schema migration. obs_id is PK: one embedding per observation.
-  -- Written best-effort after the observation insert; a NULL/missing row
-  -- just means "not embedded yet" and is picked up by the boot-time sweep.
-  CREATE TABLE IF NOT EXISTS embeddings (
-    obs_id INTEGER PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,
-    vector BLOB NOT NULL,
-    model TEXT NOT NULL,
-    embedded_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
@@ -690,77 +679,7 @@ function addObservation(section, entityName, content) {
   const entity = ensureEntity(section, entityName);
   touchEntity(entity.id);
   const info = db.prepare('INSERT INTO observations (entity_id, content) VALUES (?, ?)').run(entity.id, content);
-  const obsId = info.lastInsertRowid;
-  embedObservationAsync(obsId, content);
-  return { observation_id: obsId, entity: entityName };
-}
-
-// Fire-and-forget: embeds a freshly written observation without ever
-// blocking or throwing back into the write path. If it fails (model still
-// loading, OOM, etc.) the row simply has no embeddings row yet and the
-// boot-time sweep (backfillMissingEmbeddings) will catch it later. Data
-// durability must never be coupled to the embedding model's health.
-function embedObservationAsync(obsId, content) {
-  Promise.resolve()
-    .then(async () => {
-      const { embed, MODEL_NAME } = require('./embeddings');
-      const vec = await embed(content);
-      saveEmbedding(obsId, vec, MODEL_NAME);
-    })
-    .catch((err) => {
-      console.error(`embedObservationAsync: failed for obs ${obsId} -`, err.message);
-    });
-}
-
-function saveEmbedding(obsId, vector, model) {
-  const { toBuffer } = require('./embeddings');
-  db.prepare(
-    `INSERT INTO embeddings (obs_id, vector, model, embedded_at) VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(obs_id) DO UPDATE SET vector = excluded.vector, model = excluded.model, embedded_at = excluded.embedded_at`
-  ).run(obsId, toBuffer(vector), model);
-}
-
-function getObservationsMissingEmbeddings(limit = 25) {
-  return db.prepare(
-    `SELECT o.id, o.content FROM observations o
-     LEFT JOIN embeddings em ON em.obs_id = o.id
-     WHERE em.obs_id IS NULL
-     ORDER BY o.id ASC LIMIT ?`
-  ).all(limit);
-}
-
-function getEmbeddingsForSearch(section) {
-  return db.prepare(
-    `SELECT o.id, o.content, o.protected, o.updated_at, ent.name AS entity, em.vector
-     FROM embeddings em
-     JOIN observations o ON o.id = em.obs_id
-     JOIN entities ent ON ent.id = o.entity_id
-     WHERE ent.section = ?`
-  ).all(section);
-}
-
-// Boot-time / periodic sweep: embeds any observation left without a row in
-// `embeddings` (new writes that failed inline, or the one-time backfill of
-// pre-existing observations). Safe to call repeatedly; no-ops once caught up.
-async function backfillMissingEmbeddings(batchSize = 25) {
-  const { embed, MODEL_NAME } = require('./embeddings');
-  let total = 0;
-  for (;;) {
-    const rows = getObservationsMissingEmbeddings(batchSize);
-    if (rows.length === 0) break;
-    for (const row of rows) {
-      try {
-        const vec = await embed(row.content);
-        saveEmbedding(row.id, vec, MODEL_NAME);
-        total++;
-      } catch (err) {
-        console.error(`backfillMissingEmbeddings: failed for obs ${row.id} -`, err.message);
-      }
-    }
-    if (rows.length < batchSize) break;
-  }
-  if (total > 0) console.log(`backfillMissingEmbeddings: embedded ${total} observation(s)`);
-  return total;
+  return { observation_id: info.lastInsertRowid, entity: entityName };
 }
 
 function getObservation(section, observationId) {
@@ -966,39 +885,6 @@ function search(section, query) {
   ).all(section, like);
 
   return { entities, observations, events };
-}
-
-// Hybrid upgrade of search(): keyword pass (as above, unchanged) plus a
-// semantic pass over observation embeddings, merged and deduped by id.
-// Keyword results always win the slot on overlap; semantic-only hits (no
-// LIKE match, but conceptually close) are appended after. Best-effort: if
-// the embedding model isn't loaded or nothing is embedded yet, this
-// silently degrades to plain keyword search - callers always get a result.
-async function hybridSearch(section, query, { semanticLimit = 8, minScore = 0.35 } = {}) {
-  const keyword = search(section, query);
-
-  let semanticObs = [];
-  try {
-    const { embed, fromBuffer, dot } = require('./embeddings');
-    const queryVec = await embed(query);
-    const candidates = getEmbeddingsForSearch(section);
-    semanticObs = candidates
-      .map((row) => ({ ...row, score: dot(queryVec, fromBuffer(row.vector)) }))
-      .filter((row) => row.score >= minScore)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, semanticLimit)
-      .map(({ vector, score, ...rest }) => ({ ...rest, match: 'semantic', score: Number(score.toFixed(3)) }));
-  } catch (err) {
-    console.error('hybridSearch: semantic pass skipped -', err.message);
-  }
-
-  const seen = new Set(keyword.observations.map((o) => o.id));
-  const observations = [
-    ...keyword.observations.map((o) => ({ ...o, match: 'keyword' })),
-    ...semanticObs.filter((o) => !seen.has(o.id)),
-  ];
-
-  return { entities: keyword.entities, observations, events: keyword.events };
 }
 
 function audit(caller, tool, section, allowed, detail) {
@@ -1432,11 +1318,6 @@ module.exports = {
   logEvent,
   getHistory,
   search,
-  hybridSearch,
-  saveEmbedding,
-  getObservationsMissingEmbeddings,
-  getEmbeddingsForSearch,
-  backfillMissingEmbeddings,
   createReminder,
   getActiveReminders,
   getDueReminders,
