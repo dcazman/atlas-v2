@@ -46,11 +46,17 @@ fetch() { wget -qO- "$1" 2>/dev/null; }
 # Is the code inside the image the same code as in the working tree? This is
 # the question the build trap makes it easy to get wrong, so it gets its own
 # check rather than being inferred from "the container restarted fine".
+# Compares every shipped source file, discovered at run time rather than from a
+# hardcoded list - a new module (embeddings.js arrived in v22) must not be able
+# to slip past this check just because nobody remembered to add it here.
+# The *.bak.* working copies are not shipped, so they are not compared.
 code_matches() {
-  for f in src/server.js src/db.js src/tools.js; do
-    in_image=$(docker exec "$CONTAINER" md5sum "/app/$f" 2>/dev/null | cut -d' ' -f1)
-    on_disk=$(md5sum "$REPO/$f" 2>/dev/null | cut -d' ' -f1)
-    [ -n "$in_image" ] && [ "$in_image" = "$on_disk" ] || return 1
+  for path in "$REPO"/src/*.js; do
+    f=$(basename "$path")
+    case "$f" in *.bak.*) continue ;; esac
+    in_image=$(docker exec "$CONTAINER" md5sum "/app/src/$f" 2>/dev/null | cut -d' ' -f1)
+    on_disk=$(md5sum "$path" 2>/dev/null | cut -d' ' -f1)
+    [ -n "$in_image" ] && [ "$in_image" = "$on_disk" ] || { LAST_MISMATCH="$f"; return 1; }
   done
   return 0
 }
@@ -63,7 +69,7 @@ report_state() {
   if code_matches; then
     echo "    code      : image matches $REPO/src"
   else
-    echo "    code      : DOES NOT MATCH $REPO/src - the running container is serving different code"
+    echo "    code      : DOES NOT MATCH $REPO/src (first difference: ${LAST_MISMATCH:-?}) - the running container is serving different code"
   fi
 }
 
@@ -101,8 +107,10 @@ echo "==> recreating $CONTAINER"
 docker compose -f "$REPO/docker-compose.yml" up -d --force-recreate >/dev/null 2>&1
 
 echo "==> waiting for it to answer"
+# Generous: a cold start does a boot-time embedding backfill sweep before it
+# serves, and calling that a failed deploy would be worse than waiting.
 i=0
-while [ "$i" -lt 30 ]; do
+while [ "$i" -lt 120 ]; do
   if [ -n "$(fetch "$MCP_URL")" ] && [ -n "$(fetch "$BOARD_URL")" ]; then break; fi
   i=$((i + 1)); sleep 1
 done
