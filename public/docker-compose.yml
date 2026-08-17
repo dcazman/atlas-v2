@@ -1,0 +1,17 @@
+services:
+  atlas-mcp:
+    build: .
+    image: atlas-mcp:local
+    container_name: atlas-mcp
+    restart: unless-stopped
+    ports:
+      - "7784:7784"
+    environment:
+      # All optional. Compose reads a .env file in this directory if you make
+      # one (see .env.example); without it these defaults apply, and Atlas
+      # generates its own tokens on first start.
+      ATLAS_TOKEN: ${ATLAS_TOKEN:-}
+      ATLAS_TZ: ${ATLAS_TZ:-UTC}
+      ATLAS_GROOM_HOUR: ${ATLAS_GROOM_HOUR:-4}
+    volumes:
+      - ./data:/app/data
