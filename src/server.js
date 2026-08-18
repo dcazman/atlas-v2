@@ -687,7 +687,7 @@ ${orderBand(live, computeSlotMap())}
     const rp = computePlan(pieces, planTabSlotMap);
     if (!rp.sprint) return '';
     const conf = planNote && planNote.confidence != null
-      ? ` &middot; <b title="Claude's P(all sprint stories land by end) - the plan below is the move to raise it.">${planNote.confidence}% to land</b>`
+      ? ` &middot; <b title="Claude's P(all sprint stories land by end): as-is on the current trajectory${planNote.confidence_plan != null ? ' vs following the plan below - the gap is the plan value' : ''}.">${planNote.confidence}% as-is${planNote.confidence_plan != null ? ` &rarr; ${planNote.confidence_plan}% on plan` : ''}</b>`
       : '';
     const runway = rp.days_left != null
       ? `<b>${rp.open} open</b> &middot; <b>${rp.days_left} weekday${rp.days_left === 1 ? '' : 's'} left</b> (ends ${esc(rp.sprint_end)})${conf}${rp.days_left > 0 && rp.open / rp.days_left > 2.5 ? ' <span style="color:#fde68a">&mdash; over your ~2-3/day pace, something gets cut</span>' : ''}`
@@ -836,7 +836,7 @@ boardApp.get('/api', (req, res) => {
         const entries = dbMod.listPlanEntries(BOARD_SECTION);
         const writtenAt = [note && note.updated_at, entries[0] && entries[0].updated_at].filter(Boolean).sort().pop() || null;
         const movedAt = all.map((r) => r.updated_at).filter(Boolean).sort().pop() || null;
-        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, confidence: note && note.confidence != null ? note.confidence : null, stale: !!(writtenAt && movedAt && movedAt > writtenAt), entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
+        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, confidence: note && note.confidence != null ? note.confidence : null, confidence_plan: note && note.confidence_plan != null ? note.confidence_plan : null, stale: !!(writtenAt && movedAt && movedAt > writtenAt), entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
       } catch (e) { return null; }
     })(),
     // Board v-next item 4: what moved or closed recently (additive field).

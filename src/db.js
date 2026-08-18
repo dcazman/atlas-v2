@@ -600,7 +600,11 @@ if (db.prepare('PRAGMA user_version').get().user_version < 22) {
   // end), 0-100. The % is the SCORE; the plan is the move to raise it. Forces
   // honest reasoning about capacity vs load (pace, calendar, interrupts,
   // external-dependency holds) instead of a list that merely sounds ordered.
+  // TWO numbers (Dan): confidence = P(land) on current trajectory, as-is;
+  // confidence_plan = P(land) IF the plan below is followed. The gap between
+  // them is the plan's value - a plan that doesn't raise the odds is noise.
   try { db.exec('ALTER TABLE plan_notes ADD COLUMN confidence INTEGER'); } catch (e) { /* already present */ }
+  try { db.exec('ALTER TABLE plan_notes ADD COLUMN confidence_plan INTEGER'); } catch (e) { /* already present */ }
   db.exec('PRAGMA user_version = 22');
 }
 
@@ -1371,14 +1375,14 @@ function updateWorker(section, id, fields = {}) {
 // plan_notes (v20). Claude's one-sentence read of Dan's day, one per section.
 // Upsert-only - there is no history table because the read is a live opinion,
 // not a record; log_event carries anything worth remembering.
-function setPlanNote(section, note, confidence = null) {
-  db.prepare(`INSERT INTO plan_notes (section, note, confidence, updated_at) VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(section) DO UPDATE SET note = excluded.note, confidence = COALESCE(excluded.confidence, confidence), updated_at = datetime('now')`).run(section, note, confidence);
+function setPlanNote(section, note, confidence = null, confidence_plan = null) {
+  db.prepare(`INSERT INTO plan_notes (section, note, confidence, confidence_plan, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(section) DO UPDATE SET note = excluded.note, confidence = COALESCE(excluded.confidence, confidence), confidence_plan = COALESCE(excluded.confidence_plan, confidence_plan), updated_at = datetime('now')`).run(section, note, confidence, confidence_plan);
   return { ok: true, section };
 }
 
 function getPlanNote(section) {
-  return db.prepare('SELECT note, confidence, updated_at FROM plan_notes WHERE section = ?').get(section) || null;
+  return db.prepare('SELECT note, confidence, confidence_plan, updated_at FROM plan_notes WHERE section = ?').get(section) || null;
 }
 
 // sprint_meta (v22). Upsert per (section, sprint).

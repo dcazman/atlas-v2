@@ -831,10 +831,11 @@ function registerTools(server, auth) {
     inputSchema: {
       section: SECTION,
       note: z.string().describe('The one-sentence read. Plain, terse, Dan\'s terms - a partner talking, not a report.'),
-      confidence: z.number().int().min(0).max(100).optional().describe('P(all current-sprint stories land by sprint end), 0-100. The % is the SCORE, the plan is the move to raise it: estimate honestly from pace (~2-3/day), days left, calendar losses, interrupt rate, and external-dependency holds - then shape the plan (unblock external asks first, name cut/carry candidates early) to push it up. Re-estimate on every rewrite.'),
+      confidence: z.number().int().min(0).max(100).optional().describe('P(all current-sprint stories land by end) on the CURRENT trajectory, as-is, 0-100. Estimate honestly from pace (~2-3/day), days left, calendar losses, interrupt rate, external-dependency holds. Re-estimate on every rewrite.'),
+      confidence_plan: z.number().int().min(0).max(100).optional().describe('P(land) IF the plan below is followed, 0-100. The gap vs `confidence` is the plan\'s value - shape the plan (unblock external asks first, batch small wins, name cut/carry early) to maximize that gap. A plan that does not raise the odds is noise.'),
     },
-  }, async ({ section, note, confidence }) => {
-    return json(db.setPlanNote(section, note, confidence ?? null));
+  }, async ({ section, note, confidence, confidence_plan }) => {
+    return json(db.setPlanNote(section, note, confidence ?? null, confidence_plan ?? null));
   });
 
   guarded('board_sprint_meta', {
