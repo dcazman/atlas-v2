@@ -831,21 +831,41 @@ function registerTools(server, auth) {
     inputSchema: {
       section: SECTION,
       note: z.string().describe('The one-sentence read. Plain, terse, Dan\'s terms - a partner talking, not a report.'),
+      confidence: z.number().int().min(0).max(100).optional().describe('P(all current-sprint stories land by sprint end), 0-100. The % is the SCORE, the plan is the move to raise it: estimate honestly from pace (~2-3/day), days left, calendar losses, interrupt rate, and external-dependency holds - then shape the plan (unblock external asks first, name cut/carry candidates early) to push it up. Re-estimate on every rewrite.'),
     },
-  }, async ({ section, note }) => {
-    return json(db.setPlanNote(section, note));
+  }, async ({ section, note, confidence }) => {
+    return json(db.setPlanNote(section, note, confidence ?? null));
+  });
+
+  guarded('board_sprint_meta', {
+    title: 'Set sprint dates',
+    description:
+      'Record a sprint\'s start/end dates (v22) so the Plan tab can answer "do we land this sprint in ' +
+      'time". Jira sprint names carry the dates ("PCT CY26 #16 [8][10]- 8/10", range 10 Aug-24 Aug) - ' +
+      'scrape and write them whenever you see them (startup/agenda/danfeed). Sprints are USUALLY 2 weeks ' +
+      'but not always - if the end date cannot be determined from Jira, ASK Dan, never guess. Upsert per ' +
+      'sprint; partial updates fine (null fields keep existing values).',
+    inputSchema: {
+      section: SECTION,
+      sprint: z.string().describe('Sprint number/label as the board uses it, e.g. "16".'),
+      name: z.string().optional().describe('Full Jira sprint name, e.g. "PCT CY26 #16 [8][10]- 8/10".'),
+      start_date: z.string().optional().describe('ISO date, e.g. "2026-08-10".'),
+      end_date: z.string().optional().describe('ISO date, e.g. "2026-08-24".'),
+    },
+  }, async ({ section, sprint, name, start_date, end_date }) => {
+    return json(db.setSprintMeta(section, sprint, { name, start_date, end_date }));
   });
 
   guarded('board_plan_set', {
     title: 'Write the Plan tab',
     description:
-      'Replace Claude\'s ordered take on Dan\'s day - the Plan tab renders it (v21). Claude\'s OWN voice, ' +
-      'distinct from Dan\'s declared ORDER band. Each entry: what + a slim reason in a few words ' +
-      '("15634 - sat 12d", "16151 - Josh waiting; J needs to jump in, mention it"). Whole-list replace; ' +
-      'rewrite whenever the read changes (morning, after a close, after new info). Feed it from /api ' +
-      'plan.holds, sprint standing, Dan\'s pace (~2-3 tickets/day), time of day, calendar. THE POINT: ' +
-      'the delta vs Dan\'s order is a learning chance - when the lists disagree, ask Dan why once at groom ' +
-      'time and remember the answer, or gently flag drift. Never nag.',
+      'Replace Claude\'s plan on the Plan tab (v21). THE MISSION (Dan, Aug 18): how we finish the CURRENT ' +
+      'sprint in time - or the best guess. Entries = the path in order, plus honest calls ("these two won\'t ' +
+      'make it - cut or carry"). Each entry: what + a slim reason in a few words. Whole-list replace; rewrite ' +
+      'on every pin/close/hold/new info, not just mornings (/api plan.stale=true means you\'re late). Feed it ' +
+      'from /api plan.holds + days left (sprint_meta), Dan\'s pace (~2-3 tickets/day), time of day, calendar. ' +
+      'The delta vs Dan\'s declared order is a learning chance - ask why once at groom time, remember the ' +
+      'answer, or gently flag drift. Never nag.',
     inputSchema: {
       section: SECTION,
       entries: z.array(z.object({

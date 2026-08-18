@@ -375,8 +375,31 @@ function computePlan(pieces, slotMap) {
       waiting_on: p.waiting_on || null,
     }))
     .sort((a, b) => b.held_days - a.held_days);
+  // Sprint runway (v22): weekdays from today through end_date inclusive.
+  // end unknown => null days_left; the tab says so and the conductor ASKS Dan
+  // (never guesses - sprints are usually 2 weeks, #17 was 1).
+  let sprintEnd = null, daysLeft = null;
+  if (sprintName) {
+    try {
+      const meta = dbMod.getSprintMeta(BOARD_SECTION, sprintName);
+      if (meta && meta.end_date) {
+        sprintEnd = meta.end_date;
+        const end = new Date(meta.end_date + 'T23:59:59Z');
+        const d = new Date(); d.setUTCHours(0, 0, 0, 0);
+        let n = 0;
+        while (d <= end && n < 60) {
+          const dow = d.getUTCDay();
+          if (dow !== 0 && dow !== 6) n++;
+          d.setUTCDate(d.getUTCDate() + 1);
+        }
+        daysLeft = d > end && n === 0 ? 0 : n;
+      }
+    } catch (e) {}
+  }
   return {
     sprint: sprintName,
+    sprint_end: sprintEnd,
+    days_left: daysLeft,
     open: open.length,
     in_progress: count('in_progress'),
     on_hold: count('on_hold'),
@@ -658,7 +681,20 @@ ${orderBand(live, computeSlotMap())}
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="plan" class="panel">
-  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude's ordered take on Dan's day - its own voice, rewritten whenever its read changes. The delta vs Dan's order below is the point: disagreement is a learning chance, not a problem.">Claude thinks ⓘ${planStale ? ' <span style="text-transform:none;letter-spacing:0;color:#fde68a">— board has moved since this was written</span>' : ''}${planNote && planNote.note ? ` &mdash; <span style="text-transform:none;letter-spacing:0;color:#cfd6e2">${esc(planNote.note)}</span>` : ''}</h3>
+  ${(() => {
+    // Runway header (v22): the question this tab answers - do we land the
+    // current sprint in time. Unknown end date is said out loud, not guessed.
+    const rp = computePlan(pieces, planTabSlotMap);
+    if (!rp.sprint) return '';
+    const conf = planNote && planNote.confidence != null
+      ? ` &middot; <b title="Claude's P(all sprint stories land by end) - the plan below is the move to raise it.">${planNote.confidence}% to land</b>`
+      : '';
+    const runway = rp.days_left != null
+      ? `<b>${rp.open} open</b> &middot; <b>${rp.days_left} weekday${rp.days_left === 1 ? '' : 's'} left</b> (ends ${esc(rp.sprint_end)})${conf}${rp.days_left > 0 && rp.open / rp.days_left > 2.5 ? ' <span style="color:#fde68a">&mdash; over your ~2-3/day pace, something gets cut</span>' : ''}`
+      : `<b>${rp.open} open</b> &middot; <span style="color:#fde68a">sprint end unknown &mdash; needs board_sprint_meta (scrape Jira or ask Dan)</span>${conf}`;
+    return `<div style="margin:18px 0 2px;font-size:13px;color:#9fb0c3">Sprint ${esc(rp.sprint)}: ${runway}</div>`;
+  })()}
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude's plan for landing the current sprint in time - or the best guess. Rewritten whenever its read changes. The delta vs Dan's order below is the point: disagreement is a learning chance, not a problem.">Claude thinks ⓘ${planStale ? ' <span style="text-transform:none;letter-spacing:0;color:#fde68a">— board has moved since this was written</span>' : ''}${planNote && planNote.note ? ` &mdash; <span style="text-transform:none;letter-spacing:0;color:#cfd6e2">${esc(planNote.note)}</span>` : ''}</h3>
   ${planRows ? `<table><thead><tr><th>Pos</th><th>Entry</th></tr></thead><tbody>${planRows}</tbody></table>` : `<div class="empty">No plan written yet.</div>`}
   <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Dan's declared order (the ORDER band) - his voice, untouched by Claude.">Dan said</h3>
   ${danOrderRows ? `<table><thead><tr><th>Pos</th><th>Piece</th></tr></thead><tbody>${danOrderRows}</tbody></table>` : `<div class="empty">No declared order.</div>`}
@@ -800,7 +836,7 @@ boardApp.get('/api', (req, res) => {
         const entries = dbMod.listPlanEntries(BOARD_SECTION);
         const writtenAt = [note && note.updated_at, entries[0] && entries[0].updated_at].filter(Boolean).sort().pop() || null;
         const movedAt = all.map((r) => r.updated_at).filter(Boolean).sort().pop() || null;
-        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, stale: !!(writtenAt && movedAt && movedAt > writtenAt), entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
+        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, confidence: note && note.confidence != null ? note.confidence : null, stale: !!(writtenAt && movedAt && movedAt > writtenAt), entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
       } catch (e) { return null; }
     })(),
     // Board v-next item 4: what moved or closed recently (additive field).

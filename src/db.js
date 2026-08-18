@@ -578,6 +578,32 @@ if (db.prepare('PRAGMA user_version').get().user_version < 20) {
   db.exec('PRAGMA user_version = 20');
 }
 
+// v22: SPRINT META (Dan, Aug 18). Sprint start/end dates so the Plan tab can
+// answer THE question: do we land the current sprint in time. Jira sprint
+// names carry the dates ("PCT CY26 #16 [8][10]- 8/10", range 10 Aug-24 Aug) -
+// whoever sees them (danfeed/conductor) scrapes and writes here; when the end
+// date can't be determined, ASK Dan - never guess. Usually 2-week sprints,
+// but not always (#17 was 1 week), so end_date is stored, not derived.
+if (db.prepare('PRAGMA user_version').get().user_version < 22) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sprint_meta (
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      sprint TEXT NOT NULL,
+      name TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (section, sprint)
+    );
+  `);
+  // Confidence (Dan, Aug 18): the plan carries P(all sprint stories land by
+  // end), 0-100. The % is the SCORE; the plan is the move to raise it. Forces
+  // honest reasoning about capacity vs load (pace, calendar, interrupts,
+  // external-dependency holds) instead of a list that merely sounds ordered.
+  try { db.exec('ALTER TABLE plan_notes ADD COLUMN confidence INTEGER'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 22');
+}
+
 // v21: PLAN TAB (Dan, Aug 13). Claude's ordered take on Dan's day - its OWN
 // voice, distinct from Dan's declared ORDER band. Each entry = what + a slim
 // reason ("15634 - sat 12d", "16151 - Josh waiting; J needs to jump in").
@@ -1345,14 +1371,30 @@ function updateWorker(section, id, fields = {}) {
 // plan_notes (v20). Claude's one-sentence read of Dan's day, one per section.
 // Upsert-only - there is no history table because the read is a live opinion,
 // not a record; log_event carries anything worth remembering.
-function setPlanNote(section, note) {
-  db.prepare(`INSERT INTO plan_notes (section, note, updated_at) VALUES (?, ?, datetime('now'))
-    ON CONFLICT(section) DO UPDATE SET note = excluded.note, updated_at = datetime('now')`).run(section, note);
+function setPlanNote(section, note, confidence = null) {
+  db.prepare(`INSERT INTO plan_notes (section, note, confidence, updated_at) VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(section) DO UPDATE SET note = excluded.note, confidence = COALESCE(excluded.confidence, confidence), updated_at = datetime('now')`).run(section, note, confidence);
   return { ok: true, section };
 }
 
 function getPlanNote(section) {
-  return db.prepare('SELECT note, updated_at FROM plan_notes WHERE section = ?').get(section) || null;
+  return db.prepare('SELECT note, confidence, updated_at FROM plan_notes WHERE section = ?').get(section) || null;
+}
+
+// sprint_meta (v22). Upsert per (section, sprint).
+function setSprintMeta(section, sprint, { name = null, start_date = null, end_date = null } = {}) {
+  db.prepare(`INSERT INTO sprint_meta (section, sprint, name, start_date, end_date, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(section, sprint) DO UPDATE SET
+      name = COALESCE(excluded.name, name),
+      start_date = COALESCE(excluded.start_date, start_date),
+      end_date = COALESCE(excluded.end_date, end_date),
+      updated_at = datetime('now')`).run(section, String(sprint), name, start_date, end_date);
+  return { ok: true, sprint: String(sprint) };
+}
+
+function getSprintMeta(section, sprint) {
+  return db.prepare('SELECT * FROM sprint_meta WHERE section = ? AND sprint = ?').get(section, String(sprint)) || null;
 }
 
 // plan_entries (v21). Whole-list replace in a transaction - Claude's plan is
@@ -1467,6 +1509,8 @@ module.exports = {
   getPlanNote,
   setPlanEntries,
   listPlanEntries,
+  setSprintMeta,
+  getSprintMeta,
   addResearchItem,
   listResearch,
   getResearch,
