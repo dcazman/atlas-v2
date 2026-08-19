@@ -614,7 +614,7 @@ function renderBoard() {
   .ord-sep{color:#3a4150;margin:0 8px}
   .tabs{display:flex;gap:6px;padding:12px 18px 0}
   .tabs button{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;padding:7px 14px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px}
-  .tabs button.on{background:#232a36;color:#fff}
+  .tabs button.on{background:#2a3242;color:#ffd77a;border-color:#e0b24a;box-shadow:inset 0 -3px 0 #e0b24a;font-weight:600}
   .tabs .jumpbtn{padding:7px 10px;color:#8b94a3;border-radius:8px 8px 0 0}
   .tabs .jumpbtn:hover{color:#fff}
   .panel{display:none;padding:0 18px 24px}
