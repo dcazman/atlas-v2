@@ -647,8 +647,10 @@ function renderBoard() {
   /* On-hold rows (Dan, Aug 19): dimming alone was invisible next to white
      todo rows - holds now carry an amber wash + amber cell bars (same shape
      as the pinned gold, weaker tone) so "parked, not done" reads at a glance. */
-  tr.hold td{opacity:.85;background:rgba(224,178,74,.06);box-shadow:inset 2px 0 0 #8a6a1e}
-  tr.hold td:first-child{border-left:3px solid #b98a2e}
+  /* Visual vocabulary (Dan, Aug 19): per-cell gold BARS mean pinned - nothing
+     else gets bars. A hold is a flat amber-tinted row + one left edge only. */
+  tr.hold td{opacity:.85;background:rgba(224,178,74,.07)}
+  tr.hold td:first-child{border-left:3px solid #8a6a1e}
   tr.closed td{text-decoration:line-through;opacity:.45}
   tr.ghost td{opacity:.35;font-style:italic}
   td.ghost-txt{color:#8b94a3}
