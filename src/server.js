@@ -220,7 +220,10 @@ function rowAnchorId(related, rowId) {
 
 function slotRow(slot, p, isClosed) {
   const rel = parseRelated(p.related);
-  const pinned = p.priority !== null && p.priority !== undefined;
+  // Pin visuals are for LIVE pinned work only (Dan, Aug 19): priority isn't
+  // cleared on close, so a done row kept its gold bars - a closed row now
+  // renders closed, never pinned, regardless of the leftover flag.
+  const pinned = !isClosed && p.status !== 'done' && p.priority !== null && p.priority !== undefined;
   const numGrey = isClosed || pinned || p.status === 'in_progress';
   const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim());
   const rowCls = [
@@ -635,6 +638,8 @@ function renderBoard() {
   td.last-comment .muted{color:#4b5563}
   tr.zonehdr td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;padding:16px 10px 6px;border-bottom:2px solid #313846;background:#0f1115}
   tr.zh-active td{color:#7ab3ff}
+  #thstatus{cursor:pointer;user-select:none}
+  #thstatus.sorted{color:#e0b24a}
   tr.zh-sprint td{color:#86efac}
   tr.zh-backlog td{color:#fde68a}
   tr.pinned td{box-shadow:inset 3px 0 0 #e0b24a}
@@ -681,7 +686,7 @@ ${orderBand(live, computeSlotMap())}
 </div>
 </div>
 <div id="board" class="panel on">
-  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th id="thstatus" onclick="toggleStatusSort()" title="Click: sort the ACTIVE sprint by status (in progress → on hold → todo → done). Click again: back to board order. Other blocks never move; Slot numbers stay frozen.">Status&nbsp;&#8645;</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 <div id="plan" class="panel">
   ${(() => {
@@ -719,6 +724,20 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
+// Status sort, ACTIVE sprint block only (Dan, Aug 19): a VIEW reorder - Slot
+// numbers stay frozen, other blocks never move. Order when on: in progress,
+// on hold, todo, done. Persisted so the 30s reload keeps it.
+var statusSorted=false;try{statusSorted=localStorage.getItem('atlasSortStatus')==='1';}catch(e){}
+var segOrig=null;
+function activeSeg(){var tb=document.querySelector('#board tbody');if(!tb)return null;var rows=Array.prototype.slice.call(tb.children);var s=-1,e=rows.length;for(var i=0;i<rows.length;i++){var r=rows[i];if(r.classList.contains('zonehdr')){if(r.classList.contains('zh-active')){s=i+1;}else if(s>=0){e=i;break;}}}if(s<0)return null;return{tb:tb,rows:rows,s:s,e:e};}
+function applyStatusSort(){var a=activeSeg();if(!a)return;var seg=a.rows.slice(a.s,a.e);if(!segOrig)segOrig=seg.slice();
+  var rk=function(r){var b=r.querySelector('.b');if(!b)return 9;if(b.classList.contains('b-in_progress'))return 0;if(b.classList.contains('b-on_hold'))return 1;if(b.classList.contains('b-todo'))return 2;if(b.classList.contains('b-done'))return 3;return 9;};
+  var sorted=seg.slice().sort(function(x,y){var d=rk(x)-rk(y);return d!==0?d:seg.indexOf(x)-seg.indexOf(y);});
+  var anchor=a.rows[a.e]||null;
+  (statusSorted?sorted:segOrig).forEach(function(r){a.tb.insertBefore(r,anchor);});
+  var t=document.getElementById('thstatus');if(t)t.classList.toggle('sorted',statusSorted);}
+function toggleStatusSort(){statusSorted=!statusSorted;try{localStorage.setItem('atlasSortStatus',statusSorted?'1':'0');}catch(e){}applyStatusSort();}
+if(statusSorted)applyStatusSort();
 function setStickyH(){var s=document.getElementById('stickytop');if(s)document.documentElement.style.setProperty('--stickyh',s.offsetHeight+'px');}
 window.addEventListener('resize',setStickyH);
 setStickyH();
