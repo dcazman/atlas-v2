@@ -216,7 +216,11 @@ function registerTools(server, auth) {
   guarded('upsert_entity', {
     title: 'Create or update entity',
     description:
-      'Create a new topic/project, or update its one-line summary. Does not touch its observations.',
+      'Create a new topic/project, or update its one-line summary. Does not touch its observations. ' +
+      'Search-gated: creating a brand-new name that is a known alias (merged away by merge_entity) redirects ' +
+      'silently to the surviving entity (result carries "redirected"); creating one that is merely similar to ' +
+      'an existing name still succeeds but the result carries "similar_entities" - check it before assuming ' +
+      'this is really new, consider merge_entity if it turns out to be the same topic.',
     inputSchema: {
       section: SECTION,
       name: z.string().describe('Entity name.'),
@@ -224,6 +228,26 @@ function registerTools(server, auth) {
     },
   }, async ({ section, name, summary }) => {
     return json(db.upsertEntity(section, name, summary));
+  });
+
+  guarded('merge_entity', {
+    title: 'Merge entity',
+    description:
+      'Merge one entity into another - the operational half of duplicate cleanup. Copies every observation ' +
+      'from "from" into "into" (unprotected ones get a \'MERGED IN from X\' prefix; protected ones move over ' +
+      'as-is, keeping their protection and original id), records "from" as a permanent alias for "into" (so ' +
+      'add_observation/upsert_entity recreating that name redirects here automatically from then on), then ' +
+      'deletes the now-empty "from" entity. Use only after pulling get_entity on both and confirming this is a ' +
+      'real duplicate, not a related-but-distinct topic - merging those is worse than leaving them separate.',
+    inputSchema: {
+      section: SECTION,
+      from: z.string().describe('The duplicate entity name to merge away.'),
+      into: z.string().describe('The surviving entity name to merge into.'),
+    },
+  }, async ({ section, from, into }) => {
+    const r = db.mergeEntity(section, from, into);
+    if (!r.ok) return text(`Merge failed: ${r.reason}.`);
+    return text(`Merged "${from}" into "${into}" (${r.moved} observation(s) moved/copied). "${from}" is now a permanent alias - recreating it will redirect here.`);
   });
 
   guarded('remove_entity', {
@@ -246,7 +270,9 @@ function registerTools(server, auth) {
     title: 'Add observation',
     description:
       'Add a fact to a topic/project. Creates the entity if it does not exist yet. ' +
-      'Use this to record current state, e.g. "deployed on port 7782" or "waiting on PennyMac callback".',
+      'Use this to record current state, e.g. "deployed on port 7782" or "waiting on PennyMac callback". ' +
+      'Search-gated on creation same as upsert_entity: a known-alias name redirects silently ("redirected" in ' +
+      'the result); a merely-similar new name still succeeds but carries "similar_entities" - check it.',
     inputSchema: {
       section: SECTION,
       entity: z.string().describe('Entity name this observation belongs to.'),

@@ -640,6 +640,106 @@ if (db.prepare('PRAGMA user_version').get().user_version < 23) {
   db.exec('PRAGMA user_version = 23');
 }
 
+// v24: entity_aliases + search-gated creation (Dan design conversation, Aug 20
+// 2026, obs 1445). Two independent guards against re-fragmentation, both
+// non-blocking - creation always still succeeds, callers just get told:
+// (a) an ALIAS is a settled prior decision (something was already merged
+//     away under this name) - resolved silently, writes redirect to the
+//     canonical entity, no judgment call needed at write time.
+// (b) a SIMILARITY warning is NOT settled - a same-section entity with a
+//     close name exists, but might be a true dupe or a related-but-distinct
+//     topic (see the plan's own taxonomy). Surfaced back to the caller,
+//     never auto-merged.
+if (db.prepare('PRAGMA user_version').get().user_version < 24) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entity_aliases (
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      dead_name TEXT NOT NULL,
+      canonical_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (section, dead_name)
+    );
+  `);
+  db.exec('PRAGMA user_version = 24');
+}
+
+function nameTokens(s) {
+  return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
+}
+function nameJaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+const NAME_SIMILARITY_THRESHOLD = 0.5;
+
+function resolveAlias(section, name) {
+  const row = db.prepare('SELECT canonical_name FROM entity_aliases WHERE section = ? AND dead_name = ?').get(section, name);
+  return row ? row.canonical_name : null;
+}
+
+function recordAlias(section, deadName, canonicalName) {
+  db.prepare(
+    `INSERT INTO entity_aliases (section, dead_name, canonical_name) VALUES (?, ?, ?)
+     ON CONFLICT(section, dead_name) DO UPDATE SET canonical_name = excluded.canonical_name`
+  ).run(section, deadName, canonicalName);
+}
+
+// Same-section + shared, same spirit as get_landscape's own merge rule.
+function findSimilarEntityNames(section, name) {
+  const toks = nameTokens(name);
+  if (!toks.size) return [];
+  const candidates = section === 'shared'
+    ? db.prepare("SELECT name, section FROM entities WHERE section = 'shared'").all()
+    : db.prepare("SELECT name, section FROM entities WHERE section IN (?, 'shared')").all(section);
+  const out = [];
+  for (const c of candidates) {
+    if (c.name === name) continue;
+    const sim = nameJaccard(toks, nameTokens(c.name));
+    if (sim >= NAME_SIMILARITY_THRESHOLD) out.push({ name: c.name, section: c.section, similarity: Math.round(sim * 100) / 100 });
+  }
+  return out.sort((a, b) => b.similarity - a.similarity).slice(0, 3);
+}
+
+// The gate: called wherever a brand-new entity is about to be created.
+// Never blocks - always returns something write-able - but tells the caller
+// what it found, so add_observation/upsert_entity stay non-blocking (board
+// mirrors Jira and never blocks; same spirit here) while still surfacing
+// the two cases from the design instead of silently creating a fragment.
+function ensureEntityChecked(section, name) {
+  const alias = resolveAlias(section, name);
+  if (alias && alias !== name) {
+    return { entity: ensureEntity(section, alias), redirectedFrom: name, similar: [] };
+  }
+  const existing = findEntity(section, name);
+  if (existing) return { entity: existing, redirectedFrom: null, similar: [] };
+  const similar = findSimilarEntityNames(section, name);
+  return { entity: ensureEntity(section, name), redirectedFrom: null, similar };
+}
+
+function mergeEntity(section, fromName, intoName) {
+  const from = findEntity(section, fromName);
+  const into = findEntity(section, intoName);
+  if (!from) return { ok: false, reason: 'from_not_found' };
+  if (!into) return { ok: false, reason: 'into_not_found' };
+  if (from.id === into.id) return { ok: false, reason: 'same_entity' };
+  const fromObs = db.prepare('SELECT id, content, protected FROM observations WHERE entity_id = ?').all(from.id);
+  for (const o of fromObs) {
+    if (o.protected) {
+      // move, not copy - keeps protection and original id intact
+      db.prepare('UPDATE observations SET entity_id = ? WHERE id = ?').run(into.id, o.id);
+    } else {
+      db.prepare('INSERT INTO observations (entity_id, content) VALUES (?, ?)')
+        .run(into.id, `MERGED IN from "${fromName}" (obs ${o.id}): ${o.content}`);
+    }
+  }
+  recordAlias(section, fromName, intoName);
+  db.prepare('DELETE FROM entities WHERE id = ?').run(from.id);
+  touchEntity(into.id);
+  return { ok: true, moved: fromObs.length, into: intoName };
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -718,7 +818,10 @@ function getEntity(section, name) {
 }
 
 function upsertEntity(section, name, summary) {
-  const existing = findEntity(section, name);
+  const alias = resolveAlias(section, name);
+  const targetName = alias && alias !== name ? alias : name;
+  const existing = findEntity(section, targetName);
+  let similar = [];
   if (existing) {
     if (summary !== undefined && summary !== null) {
       db.prepare("UPDATE entities SET summary = ?, updated_at = datetime('now') WHERE id = ?").run(summary, existing.id);
@@ -726,9 +829,13 @@ function upsertEntity(section, name, summary) {
       touchEntity(existing.id);
     }
   } else {
-    db.prepare('INSERT INTO entities (section, name, summary) VALUES (?, ?, ?)').run(section, name, summary ?? null);
+    similar = findSimilarEntityNames(section, targetName);
+    db.prepare('INSERT INTO entities (section, name, summary) VALUES (?, ?, ?)').run(section, targetName, summary ?? null);
   }
-  return getEntity(section, name);
+  const result = getEntity(section, targetName);
+  if (alias && alias !== name) result.redirected = `"${name}" is a known alias for "${targetName}" - wrote there instead.`;
+  if (similar.length) result.similar_entities = similar;
+  return result;
 }
 
 function removeEntity(section, name) {
@@ -741,12 +848,15 @@ function removeEntity(section, name) {
 }
 
 function addObservation(section, entityName, content) {
-  const entity = ensureEntity(section, entityName);
+  const { entity, redirectedFrom, similar } = ensureEntityChecked(section, entityName);
   touchEntity(entity.id);
   const info = db.prepare('INSERT INTO observations (entity_id, content) VALUES (?, ?)').run(entity.id, content);
   const obsId = info.lastInsertRowid;
   embedObservationAsync(obsId, content);
-  return { observation_id: obsId, entity: entityName };
+  const result = { observation_id: obsId, entity: entity.name };
+  if (redirectedFrom) result.redirected = `"${redirectedFrom}" is a known alias for "${entity.name}" - wrote there instead.`;
+  if (similar.length) result.similar_entities = similar;
+  return result;
 }
 
 // Fire-and-forget: embeds a freshly written observation without ever
@@ -1494,6 +1604,8 @@ module.exports = {
   upsertEntity,
   removeEntity,
   setEntityCore,
+  mergeEntity,
+  resolveAlias,
   addObservation,
   getObservation,
   getObservationsByIds,
