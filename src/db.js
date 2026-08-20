@@ -785,6 +785,30 @@ function setEntityCore(section, name, value) {
 // deliberate full-dump fallback - the worst case, not the normal path. See
 // v23 migration note above for why: this call was the actual source of the
 // oversized (670K+ char) responses, not entity count or observation size.
+// Lightweight full-coverage enumeration - names/summaries/counts only, no
+// observation bodies. get_landscape(all=true) technically lists everything
+// too, but drags every observation along (this is what returned 668K+
+// chars) - unusable for a browse/audit pass. This is the complement:
+// get_landscape for the bounded "now" view, get_entity for one topic in
+// full, this for "every entity that exists, cheaply."
+function listEntities(section) {
+  const withCounts = (rows, sec) => rows.map((r) => ({
+    ...r,
+    section: sec,
+    observation_count: db.prepare('SELECT COUNT(*) n FROM observations WHERE entity_id = ?').get(r.id).n,
+  }));
+  const own = withCounts(
+    db.prepare('SELECT id, name, summary, core, updated_at FROM entities WHERE section = ? ORDER BY updated_at DESC').all(section),
+    section
+  );
+  if (section === 'shared') return own;
+  const shared = withCounts(
+    db.prepare("SELECT id, name, summary, core, updated_at FROM entities WHERE section = 'shared' ORDER BY updated_at DESC").all(),
+    'shared'
+  );
+  return own.concat(shared);
+}
+
 function getLandscape(section, { all = false } = {}) {
   // Own section + shared merged: any landscape pull automatically sees shared.
   // Entities and reminders are tagged with their origin section.
@@ -1600,6 +1624,7 @@ function closeWorker(section, id) {
 
 module.exports = {
   getLandscape,
+  listEntities,
   getEntity,
   upsertEntity,
   removeEntity,

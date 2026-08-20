@@ -176,6 +176,20 @@ function registerTools(server, auth) {
     return text(`"${name}" evicted from core (still intact, reachable via search/get_entity).`);
   });
 
+  guarded('list_entities', {
+    title: 'List all entities',
+    description:
+      'Enumerate every entity in a section (own + shared merged), regardless of core/archived status - ' +
+      'name, summary, core flag, updated_at, and observation_count only, never observation bodies. This is ' +
+      'the lightweight full-coverage tool: get_landscape only shows core by default (and all=true drags every ' +
+      'observation along - the thing that returns 660K+ chars); search is keyword/similarity and does not ' +
+      'guarantee full coverage; get_entity is one topic in full. Use this for a browse/audit pass over ' +
+      'everything, then get_entity on whichever ones actually need a closer look.',
+    inputSchema: { section: SECTION },
+  }, async ({ section }) => {
+    return json(db.listEntities(section));
+  });
+
   guarded('get_entity', {
     title: 'Get entity',
     description:
