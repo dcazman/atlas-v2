@@ -580,3 +580,39 @@ as the v23 deploy, not a new issue.
 *Shipped 2026-08-20, same session as the core memory tier, at Dan's explicit
 "why not now" - real system scale (82 work / 21 shared entities, not the
 plan's estimated "~2k") made same-day execution of both halves reasonable.*
+
+# Groom: cross-entity name clustering — SHIPPED (2026-08-20)
+
+Third and final piece of the Aug 19 dedup plan. Groom already caught two
+things - within-entity near-dupe observations, and dormant entities - but
+had no check for two *separate* entities that look like the same topic.
+That gap is what the manual review earlier this session was actually
+covering by hand (5 flagged pairs, all checked with get_entity, none merged).
+
+**What it is:** for every entity changed since the last groom run, compare
+its name (Jaccard on tokens) against the same pool `get_landscape` merges -
+own section + shared. Threshold 0.5, requires ≥2 real tokens on both sides
+(a bare 1-token name like "Atlas" would otherwise match "c-atlas" at 100%
+and flood the report with nothing real). Findings land in the same
+report-only "Groom Report" entity as everything else here - nothing is
+merged automatically, ever. A finding reads: `POSSIBLE DUPLICATE ENTITY
+NAMES: "X" (section) <-> "Y" (section) — NN% name-similar. Pull get_entity
+on both before acting - merge_entity if real, leave alone if
+related-but-distinct.`
+
+**Dry-run gotcha worth remembering:** a bare `docker cp` of just `atlas.db`
+out of the running container missed the `core` column and `entity_aliases`
+table from the same-day v23/v24 deploys - those ALTER/CREATE statements
+were sitting in the WAL, not yet checkpointed into the main file. Grooming
+that copy threw `no such column: core`. Fix: copy `atlas.db-wal` and
+`atlas.db-shm` alongside the main file for any dry run against a live
+snapshot, not just the `.db` file itself.
+
+Verified: ran clean against real data (zero false positives), then
+confirmed it actually fires by seeding a deliberately similar pair
+("Backstage domains duplicate check" vs "Backstage domains", 50%,
+correctly worded finding).
+
+*Shipped 2026-08-20, same session, closing out all three pieces of the
+duplicate-prevention plan: manual cleanup pass, search-gated creation +
+merge_entity, and this groom extension.*

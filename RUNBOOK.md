@@ -146,6 +146,14 @@ Contemporaneous records, newest first. These are snapshots of what was true on
 the day — they are **not** maintained, and anything operational in them is
 superseded by the sections above.
 
+### 2026-08-20 (later still): groom cross-entity name-clustering deployed
+Third piece of the Aug 19 dedup plan. groom.js now also flags two SEPARATE entities with similar
+names (Jaccard on name tokens, >=0.5, >=2 tokens/side) into the same report-only Groom Report,
+scoped to the same pool as get_landscape (own section + shared). Never merges anything - just
+gives merge_entity candidates. Dry-run gotcha: docker cp of just atlas.db (no -wal/-shm) missed
+that day's schema changes since they hadn't checkpointed yet - copy all three files when testing
+against a live snapshot. Full writeup in README.md.
+
 ### 2026-08-20 (later): search-gated creation + merge_entity (v24) deployed
 entity_aliases table added. add_observation/upsert_entity now redirect silently when the name being
 created is a known dead alias (set by merge_entity), and surface similar_entities (non-blocking) when
