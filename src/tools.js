@@ -648,20 +648,26 @@ function registerTools(server, auth) {
       'Deterministic drift check between the live board and an authoritative ticket snapshot (pass ' +
       'current tickets from Jira or danfeed). Returns: drifted (piece not done but its ticket is done ' +
       'in the snapshot), orphaned (piece whose ticket is absent from the snapshot), missing (open ' +
-      'snapshot tickets not on any live piece). The diff is the mechanism; the caller supplies the ' +
-      'snapshot. Report only - changes nothing. This is the reconcile-at-boot core; danfeed/hook feed it.',
+      'snapshot tickets not on any live piece), reassigned (piece whose ticket assignee is no longer ' +
+      'Dan, per assignee_is_dan - report only, does not auto-offboard the piece). The diff is the ' +
+      'mechanism; the caller supplies the snapshot. Report only - changes nothing. This is the ' +
+      'reconcile-at-boot core; danfeed/hook feed it.',
     inputSchema: {
       section: SECTION,
       tickets: z.array(z.object({
         key: z.string(),
         done: z.boolean().describe('True if the source considers this ticket resolved/closed.'),
+        assignee_is_dan: z.boolean().optional().describe(
+          'True/false if the source knows the current assignee; omit if unknown. Only an explicit ' +
+          'false triggers the reassigned category - omitted stays silent (backward compatible).'),
       })).describe('Authoritative current ticket snapshot (Jira or danfeed /jira).'),
     },
   }, async ({ section, tickets }) => {
     const snap = new Map(tickets.map((t) => [t.key, !!t.done]));
+    const assigneeSnap = new Map(tickets.map((t) => [t.key, t.assignee_is_dan]));
     const pieces = db.listBoardRows(section, false); // live pieces only
     const onBoard = new Set();
-    const drifted = [], orphaned = [];
+    const drifted = [], orphaned = [], reassigned = [];
     for (const p of pieces) {
       let rel = [];
       try { rel = JSON.parse(p.related); } catch (e) { rel = [p.related]; }
@@ -671,9 +677,16 @@ function registerTools(server, auth) {
       if (known.some((k) => snap.get(k) === true)) {
         drifted.push({ row_id: p.id, related: rel, status: p.status, title: p.title, note: 'ticket done in source, piece not' });
       }
+      const reassignedKeys = known.filter((k) => assigneeSnap.get(k) === false);
+      if (reassignedKeys.length > 0) {
+        reassigned.push({
+          row_id: p.id, related: rel, status: p.status, title: p.title,
+          reassigned_tickets: reassignedKeys, note: 'ticket assignee no longer Dan - flagged, not removed',
+        });
+      }
     }
     const missing = tickets.filter((t) => !t.done && !onBoard.has(t.key)).map((t) => t.key);
-    return json({ checked_tickets: tickets.length, live_pieces: pieces.length, drifted, orphaned, missing });
+    return json({ checked_tickets: tickets.length, live_pieces: pieces.length, drifted, orphaned, missing, reassigned });
   });
 
   guarded('board_bump', {
