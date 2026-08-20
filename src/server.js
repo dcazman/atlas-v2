@@ -225,7 +225,7 @@ function slotRow(slot, p, isClosed) {
   // renders closed, never pinned, regardless of the leftover flag.
   const pinned = !isClosed && p.status !== 'done' && p.priority !== null && p.priority !== undefined;
   const numGrey = isClosed || pinned || p.status === 'in_progress';
-  const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim());
+  const nn = p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim()) && !(p.last_comment && String(p.last_comment).trim());
   const rowCls = [
     p.status === 'on_hold' ? 'hold' : '',
     isClosed ? 'closed' : '',
@@ -800,7 +800,7 @@ boardApp.get('/api', (req, res) => {
     as_of: boardStamp(),
     section: BOARD_SECTION,
     counts: { pieces: pieces.length, pending: pending.length, research: research.length },
-    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, nickname: p.nickname || null, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, queue_pos: p.queue_pos ?? null, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
+    pieces: pieces.map((p) => ({ id: p.id, slot: (slotMap.get(p.id) || {}).slot ?? null, block: (slotMap.get(p.id) || {}).block ?? null, title: p.title, nickname: p.nickname || null, status: p.status, sprint: p.sprint, related: rel(p.related), waiting_on: p.waiting_on, last_comment: p.last_comment || null, pinned: p.priority !== null && p.priority !== undefined, queue_pos: p.queue_pos ?? null, needs_note: (p.status !== 'todo' && p.status !== 'done' && !(p.waiting_on && String(p.waiting_on).trim()) && !(p.last_comment && String(p.last_comment).trim())), age_days: boardDaysSince(p.source_date || p.status_changed_at) })),
     // v18 ORDER band (additive field): Dan's declared work order as row ids, queue sequence.
     order: (() => { try { return dbMod.listOrderQueue(BOARD_SECTION); } catch (e) { return []; } })(),
     pending: pending.map((p) => ({ id: p.id, summary: p.summary, source: p.source, age_days: boardDaysSince(p.source_date || p.created_at) })),

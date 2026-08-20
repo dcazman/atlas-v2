@@ -532,7 +532,7 @@ function registerTools(server, auth) {
       related: safeParse(row.related),
       age_days: ageDays(row.source_date || row.status_changed_at),   // true ticket age when known, else stuck-ness
       lifespan_days: ageDays(row.source_date || row.created_at),      // true ticket age when known, else time-on-board
-      needs_note: row.status !== 'todo' && row.status !== 'done' && !(row.waiting_on && String(row.waiting_on).trim()),  // FLAG: non-todo piece missing its comment -> Claude fills or asks Dan
+      needs_note: row.status !== 'todo' && row.status !== 'done' && !(row.waiting_on && String(row.waiting_on).trim()) && !(row.last_comment && String(row.last_comment).trim()),  // FLAG: non-todo piece missing BOTH Claude's note and a Jira-side comment (obs 1086/v16) -> Claude fills or asks Dan
     };
   }
 
