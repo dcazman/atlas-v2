@@ -146,6 +146,18 @@ Contemporaneous records, newest first. These are snapshots of what was true on
 the day — they are **not** maintained, and anything operational in them is
 superseded by the sections above.
 
+### 2026-08-20: core memory tier (v23) deployed
+entities.core flag added. get_landscape now returns only core=1 entities + due reminders by
+default (view: "core"); all=true still gives the old full-dump behavior (view: "all"). New tools
+promote_entity/evict_entity toggle the flag - eviction never deletes, just drops out of the
+default view. Nothing auto-promotes, ever (explicit MemGPT-style tier, not MemoryBank-style
+decay). groom.js flags core entities stale after 5+ days, report-only. Full design in
+design/CORE-MEMORY-DESIGN.md, ship writeup in README.md.
+Deploy gotcha hit: docker compose from the anchor-mcp container failed on
+`env file /mnt/user/warehouse/atlas-v2/.env not found` (this container only sees /warehouse, see
+the /mnt/user note above) - fixed by mirroring .env to that path inside the container. Mirror is
+left in place; re-copy it if .env ever changes.
+
 ### 2026-08-13: deploy trap found
 atlas-v2 docker-compose.yml has NO build section - the container runs the prebuilt image dcazman/atlas:v2.
 `docker compose up -d --build` does NOTHING for code changes and will silently serve stale code.

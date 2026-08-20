@@ -466,3 +466,65 @@ tool). Results are merged/deduped and each observation is tagged
 the Unraid host (build, test container, live deploy). Scope: observations
 only (v1, as designed) — entities/events/board rows can join later per the
 original design.*
+
+# Core memory tier — SHIPPED (2026-08-20)
+
+Design from a Dan + personal Claude talk-only session, full reasoning in
+`design/CORE-MEMORY-DESIGN.md`. Shared entity: "Atlas Core Memory Tier
+(Design)".
+
+**The problem:** `get_landscape` returned every entity in a section, no
+bound. Confirmed on this host: `all=true` on work+shared returned 668,939
+chars — not driven by entity count or any one oversized observation, just
+the lack of a bound on the default call.
+
+**What it is:** a bounded "working memory" tier, modeled on MemGPT's
+explicit core-memory design (deliberately chosen over MemoryBank's
+automatic recency/decay scoring — Atlas is already all-explicit-tool-call,
+and a board row can point at something that's gone quiet for weeks but
+still matters, so nothing should evict itself silently).
+
+- `entities.core` (INTEGER, default 0) — v23 migration, additive/idempotent.
+- `get_landscape(section)` now returns only `core=1` entities + due
+  reminders by default (`view: "core"` in the response). Pass `all: true`
+  for the old full-dump behavior (`view: "all"`) — kept as the deliberate
+  worst case, not the normal path.
+- `promote_entity` / `evict_entity` (new tools) toggle the flag by entity
+  name. Eviction never deletes — the entity stays fully intact and
+  reachable via `get_entity` or `search`, just out of the default view.
+- Nothing is auto-promoted, ever — not on creation, not on write. A brand
+  new entity starts at `core=0` like everything else; something has to
+  deliberately call `promote_entity`.
+- `groom.js` flags `core=1` entities untouched for 5+ days as "STALE CORE"
+  findings in the Groom Report — same report-only spirit as the rest of
+  groom, no auto-eviction.
+
+**Deploy notes / real gotchas hit along the way:**
+- Confirmed via dry run against a copy of the live DB (`docker cp` out,
+  tested with the modified `db.js` inside a throwaway path in the `atlas-v2`
+  container, `ATLAS_DB_PATH` pointed at the copy) before touching anything
+  live — reproduced the exact 668,939-char figure, then verified
+  promote/evict/eviction-doesn't-delete all behave as designed.
+- `docker compose ... up -d --force-recreate`, run from the anchor-mcp
+  container, failed with `env file /mnt/user/warehouse/atlas-v2/.env not
+  found` — `docker-compose.yml`'s `env_file` is an absolute host path, and
+  this container only has `/warehouse` mounted, not `/mnt/user` (see
+  RUNBOOK's existing note on this same limitation). Worked around by
+  mirroring `.env` to that same path inside this container
+  (`mkdir -p /mnt/user/warehouse/atlas-v2 && cp .env` into it) so the
+  `docker compose` CLI running here could resolve it. The mirror is left in
+  place so the next deploy from this container doesn't hit the same wall -
+  if `.env` ever changes, re-copy it.
+- No schema rollback needed either direction: the migration is a single
+  additive column with a default, so an old binary against a
+  post-migration DB just never reads/writes the new column.
+- Verified live post-deploy: image/container source hashes matched
+  (`docker exec atlas-v2 md5sum /app/src/*.js` vs the repo), both health
+  endpoints responded, and a real `get_landscape` call through the actual
+  MCP connection returned `{"entities": [], "reminders": [], "view":
+  "core"}` — empty because nothing had been promoted yet, exactly as
+  designed.
+
+*Shipped 2026-08-20. Talk-only design session first (MemGPT vs MemoryBank
+research, the "now / area" chess analogy), explicit build only after Dan
+said go.*
