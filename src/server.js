@@ -457,10 +457,11 @@ function renderBoard() {
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
   try { research = dbMod.listResearch(BOARD_SECTION); } catch (e) {}
-  let planEntries = [], planNote = null, orderIds = [];
-  try { planEntries = dbMod.listPlanEntries(BOARD_SECTION); } catch (e) {}
-  try { planNote = dbMod.getPlanNote(BOARD_SECTION); } catch (e) {}
-  try { orderIds = dbMod.listOrderQueue(BOARD_SECTION); } catch (e) {}
+  // Plan tab DECOMMISSIONED (Dan, Aug 20): the authored plan (entries, read,
+  // confidences) rotted between conductor sessions - a stale plan costs trust.
+  // plan_entries/plan_notes tables + board_plan_* tools stay dormant for a
+  // future writer that runs on every board change. The computed runway line
+  // (always true) moved to the top of the Board tab.
   let workers = [];
   try { workers = dbMod.listWorkers(BOARD_SECTION, true); } catch (e) {}
   const skills = loadSkills();
@@ -533,33 +534,8 @@ function renderBoard() {
   const pendRows = pending.map((p, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${p.id}</td><td>${esc(p.summary)}</td><td class="src">${esc(p.source)}</td><td class="age">${boardDaysSince(p.source_date || p.created_at)}</td></tr>`
   ).join('');
-  // Plan tab (v21): Claude's ordered take on Dan's day, next to Dan's own
-  // declared order - the delta between the two lists is the point (learning
-  // chance + drift check), so both render on one screen.
-  const pieceById = new Map(pieces.map((p) => [p.id, p]));
-  const planTabSlotMap = computeSlotMap();
-  // Staleness is shown, never hidden (Dan, Aug 13: a pin landed and the plan
-  // kept saying "nothing pinned" - an old opinion rendered as current). If any
-  // row moved after the plan was written, say so plainly.
-  const planWrittenAt = [planNote && planNote.updated_at, planEntries[0] && planEntries[0].updated_at].filter(Boolean).sort().pop() || null;
-  const boardMovedAt = pieces.map((p) => p.updated_at).filter(Boolean).sort().pop() || null;
-  const planStale = planWrittenAt && boardMovedAt && boardMovedAt > planWrittenAt;
-  const planRows = planEntries.map((e) => {
-    const p = e.row_id ? pieceById.get(e.row_id) : null;
-    const link = p ? (() => {
-      const anchor = rowAnchorId(p.related, p.id);
-      const slot = (planTabSlotMap.get(p.id) || {}).slot;
-      return ` <span class="act-n">${slot != null ? slot + '.' : ''}</span> <a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(parseRelated(p.related)[0] || ('#' + p.id))}</b></a>`;
-    })() : '';
-    return `<tr><td class="pos">${e.pos}</td><td>${esc(e.text)}${link}</td></tr>`;
-  }).join('');
-  const danOrderRows = orderIds.map((id, i) => {
-    const p = pieceById.get(id);
-    if (!p) return '';
-    const anchor = rowAnchorId(p.related, p.id);
-    const slot = (planTabSlotMap.get(p.id) || {}).slot;
-    return `<tr><td class="pos">${i + 1}</td><td><span class="act-n">${slot != null ? slot + '.' : ''}</span> <a href="#${anchor}" class="jump-link" data-target="${anchor}"><b>${esc(p.nickname || p.title)}</b></a></td></tr>`;
-  }).join('');
+  // Runway line (survivor of the Plan tab): computed, always true.
+  const runwayPlan = computePlan(pieces, computeSlotMap());
 
   // Research shelf (v19): Dan's own ideas, undated and unpressured. Age is
   // shown as plain information - old is NOT a problem on this tab, no styling
@@ -680,7 +656,6 @@ ${orderBand(live, computeSlotMap())}
   <button class="jumpbtn" title="Jump to top" onclick="window.scrollTo({top:0})">&uarr;</button>
   <button class="jumpbtn" title="Jump to bottom" onclick="window.scrollTo({top:document.body.scrollHeight})">&darr;</button>
   <button id="tb" class="on" onclick="show('board')">Board (${live.length})</button>
-  <button id="tpl" onclick="show('plan')">Plan (${planEntries.length})</button>
   <button id="tp" onclick="show('pending')">Tray (${pending.length})</button>
   <button id="tres" onclick="show('research')">Research (${research.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
@@ -688,27 +663,10 @@ ${orderBand(live, computeSlotMap())}
 </div>
 </div>
 <div id="board" class="panel on">
+  ${runwayPlan.sprint ? `<div style="margin:14px 0 0;font-size:13px;color:#9fb0c3">Sprint ${esc(runwayPlan.sprint)}: <b>${runwayPlan.open} open</b>${runwayPlan.days_left != null ? ` &middot; <b>${runwayPlan.days_left} weekday${runwayPlan.days_left === 1 ? '' : 's'} left</b> (ends ${esc(runwayPlan.sprint_end)})` : ' &middot; <span style="color:#fde68a">end date unknown &mdash; board_sprint_meta or ask Dan</span>'}${runwayPlan.days_left > 0 && runwayPlan.open / runwayPlan.days_left > 2.5 ? ' <span style="color:#fde68a">&mdash; over the ~2-3/day pace, something gets cut</span>' : ''}</div>` : ''}
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th id="thstatus" onclick="toggleStatusSort()" title="Click: sort the ACTIVE sprint by status (in progress → on hold → todo → done). Click again: back to board order. Other blocks never move; Slot numbers stay frozen.">Status&nbsp;&#8645;</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
-<div id="plan" class="panel">
-  ${(() => {
-    // Runway header (v22): the question this tab answers - do we land the
-    // current sprint in time. Unknown end date is said out loud, not guessed.
-    const rp = computePlan(pieces, planTabSlotMap);
-    if (!rp.sprint) return '';
-    const conf = planNote && planNote.confidence != null
-      ? ` &middot; <b title="Claude's P(all sprint stories land by end): as-is on the current trajectory${planNote.confidence_plan != null ? ' vs following the plan below - the gap is the plan value' : ''}.">${planNote.confidence}% as-is${planNote.confidence_plan != null ? ` &rarr; ${planNote.confidence_plan}% on plan` : ''}</b>`
-      : '';
-    const runway = rp.days_left != null
-      ? `<b>${rp.open} open</b> &middot; <b>${rp.days_left} weekday${rp.days_left === 1 ? '' : 's'} left</b> (ends ${esc(rp.sprint_end)})${conf}${rp.days_left > 0 && rp.open / rp.days_left > 2.5 ? ' <span style="color:#fde68a">&mdash; over your ~2-3/day pace, something gets cut</span>' : ''}`
-      : `<b>${rp.open} open</b> &middot; <span style="color:#fde68a">sprint end unknown &mdash; needs board_sprint_meta (scrape Jira or ask Dan)</span>${conf}`;
-    return `<div style="margin:18px 0 2px;font-size:13px;color:#9fb0c3">Sprint ${esc(rp.sprint)}: ${runway}</div>`;
-  })()}
-  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude's plan for landing the current sprint in time - or the best guess. Rewritten whenever its read changes. The delta vs Dan's order below is the point: disagreement is a learning chance, not a problem.">Claude thinks ⓘ${planStale ? ' <span style="text-transform:none;letter-spacing:0;color:#fde68a">— board has moved since this was written</span>' : ''}${planNote && planNote.note ? ` &mdash; <span style="text-transform:none;letter-spacing:0;color:#cfd6e2">${esc(planNote.note)}</span>` : ''}</h3>
-  ${planRows ? `<table><thead><tr><th>Pos</th><th>Entry</th></tr></thead><tbody>${planRows}</tbody></table>` : `<div class="empty">No plan written yet.</div>`}
-  <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Dan's declared order (the ORDER band) - his voice, untouched by Claude.">Dan said</h3>
-  ${danOrderRows ? `<table><thead><tr><th>Pos</th><th>Piece</th></tr></thead><tbody>${danOrderRows}</tbody></table>` : `<div class="empty">No declared order.</div>`}
-</div>
+
 <div id="pending" class="panel">
   ${pending.length ? `<table><thead><tr><th>Pos</th><th>#</th><th>Item</th><th>Source</th><th>Age</th></tr></thead><tbody>${pendRows}</tbody></table>` : `<div class="empty">Tray empty.</div>`}
 </div>
@@ -751,11 +709,11 @@ var curTab='board';try{curTab=localStorage.getItem('atlasTab')||'board';}catch(e
 var scrollMap={};try{scrollMap=JSON.parse(sessionStorage.getItem('atlasScroll')||'{}');}catch(e){}
 function show(w,init){
   if(!init){scrollMap[curTab]=window.scrollY;try{sessionStorage.setItem('atlasScroll',JSON.stringify(scrollMap));}catch(e){}}
-  for(const [id,name] of [['board','tb'],['plan','tpl'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
+  for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
   try{localStorage.setItem('atlasTab',w);}catch(e){}
   if(!init){curTab=w;window.scrollTo(0,scrollMap[w]||0);}
 }
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='plan'||t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t,true);}catch(e){}})();
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t,true);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
 // Board tab while a different tab is active - a plain #anchor can't scroll to
 // something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).
@@ -852,15 +810,15 @@ boardApp.get('/api', (req, res) => {
     // v20 plan slice 1 (additive field): active-sprint standing + hold decay,
     // computed the same way the view's PLAN strip is. holds are ALL on-hold
     // pieces, longest-sitting first - the go-back tracker.
+    // Authored plan (entries/read/confidences) DECOMMISSIONED Aug 20 - it
+    // rotted between conductor sessions. Only the computed parts remain:
+    // runway (sprint/end/days_left/counts) + hold decay. Tables and
+    // board_plan_* tools stay dormant for a future always-on writer.
     plan: (() => {
       try {
         const all = dbMod.listBoardRows(BOARD_SECTION, true);
         const p = computePlan(all, slotMap);
-        const note = dbMod.getPlanNote(BOARD_SECTION);
-        const entries = dbMod.listPlanEntries(BOARD_SECTION);
-        const writtenAt = [note && note.updated_at, entries[0] && entries[0].updated_at].filter(Boolean).sort().pop() || null;
-        const movedAt = all.map((r) => r.updated_at).filter(Boolean).sort().pop() || null;
-        return { ...p, read: note ? note.note : null, read_at: note ? note.updated_at : null, confidence: note && note.confidence != null ? note.confidence : null, confidence_plan: note && note.confidence_plan != null ? note.confidence_plan : null, stale: !!(writtenAt && movedAt && movedAt > writtenAt), entries: entries.map((e) => ({ pos: e.pos, text: e.text, row_id: e.row_id })), holds: p.holds.map(({ related, ...h }) => h) };
+        return { ...p, holds: p.holds.map(({ related, ...h }) => h) };
       } catch (e) { return null; }
     })(),
     // Board v-next item 4: what moved or closed recently (additive field).
