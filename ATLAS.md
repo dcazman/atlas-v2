@@ -504,3 +504,23 @@ schema + `board_update` param + view display only, blank for now. **atlas-v2
 does not fetch Jira itself and this pass did not add a Jira credential** —
 populating it live is an open follow-up for whoever next touches danfeed.
 Full writeup in README.md's "Note vs Last Comment" section.
+
+## Core memory tier + duplicate-prevention plan — SHIPPED (2026-08-20)
+
+Two related pieces, same session, both from a Dan + Claude talk-only design
+conversation. **Full writeup in README.md** ("Core memory tier", "Search-gated
+creation + merge_entity", and "Groom: cross-entity name clustering" sections)
+and **design/CORE-MEMORY-DESIGN.md** for the decision trail (Obsidian detour,
+MemGPT vs MemoryBank, why explicit won over automatic decay) — read those
+before referencing `core`, `promote_entity`, `evict_entity`, `merge_entity`,
+or `entity_aliases`.
+
+Short version: `get_landscape` no longer dumps a whole section by default
+(confirmed 668,939 chars on this host before the fix) — it returns only
+`core=1` entities + due reminders, with `all=true` as the deliberate,
+non-default full-dump escape hatch. Separately, entity creation is now
+search-gated: a known-merged name redirects silently via `entity_aliases`,
+and a merely-similar new name surfaces a non-blocking warning. `merge_entity`
+operationalizes cleanup; groom's nightly report now also flags cross-entity
+name clusters as candidates for it. Migrations: v23 (`core`), v24
+(`entity_aliases`).

@@ -10,7 +10,7 @@ operational sections *and* append a dated entry to the history log.
 
 ---
 
-## Current state (verified 2026-08-17)
+## Current state (verified 2026-08-20)
 
 | | |
 |---|---|
@@ -20,6 +20,7 @@ operational sections *and* append a dated entry to the history log.
 | Ports | `7790 → 7784` (MCP), `7795 → 7795` (board view, LAN only, no auth) |
 | Code | `/warehouse/atlas-v2` (git, tracks `origin/main`) |
 | Database | `/mnt/user/appdata/atlas-v2/atlas.db` (bind-mounted to `/app/data`) |
+| Schema | `PRAGMA user_version = 24` — v23 added `entities.core` (working-memory tier), v24 added `entity_aliases` (dedup/merge) |
 | Config | `/warehouse/atlas-v2/.env` — not in git |
 | Backups | `/warehouse/atlas-backups/` (see below) |
 
@@ -63,6 +64,21 @@ wget -qO- http://localhost:7795/ | grep <thing you changed>
 ```
 
 Always take a backup before deploying — `scripts/deploy.sh` does it for you.
+
+**Deploying from the anchor-mcp container specifically** (not the bare Unraid
+host): `docker-compose.yml`'s `env_file` is the absolute path
+`/mnt/user/warehouse/atlas-v2/.env`, but this container only has `/warehouse`
+mounted, not `/mnt/user` (see the note above). A bare `docker compose up -d
+--force-recreate` from here fails with `env file ... not found`. Fix, once:
+```sh
+mkdir -p /mnt/user/warehouse/atlas-v2 && cp /warehouse/atlas-v2/.env /mnt/user/warehouse/atlas-v2/.env
+```
+That mirror is already in place as of 2026-08-20 — re-copy it if `.env` ever
+changes. Also: both `docker build` and `docker compose up -d --force-recreate`
+run from this container tend to report a client-side "request timed out" even
+when they succeed underneath — don't trust that error, verify with the
+container start-time bump, the health checks, and a source-hash match instead
+(`docker exec atlas-v2 md5sum /app/src/*.js` vs the repo).
 
 ---
 
