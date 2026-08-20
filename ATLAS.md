@@ -38,7 +38,7 @@ unrestricted — the gate is conversational. Claude only does this when Dan expl
 says so ("go look at work for X", "write that for work too"). Otherwise each project
 stays in its own section.
 
-## Tools (18 total)
+## Tools (20 total)
 
 | Tool | Purpose |
 |---|---|
