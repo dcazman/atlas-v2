@@ -22,6 +22,7 @@ const DORMANT_DAYS = 60;
 const CORE_STALE_DAYS = 5;
 const DISMISSED_REMINDER_DAYS = 90;
 const DUPE_THRESHOLD = 0.85;
+const NAME_SIM_THRESHOLD = 0.5;
 
 function tokens(s) {
   return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2));
@@ -50,17 +51,46 @@ function groomSection(section) {
   const findings = [];
   const entities = db.prepare('SELECT id, name, updated_at FROM entities WHERE section = ? AND name != ?').all(section, REPORT_ENTITY);
 
+  // Cross-entity name-clustering comparison pool: own section + shared, same
+  // merge rule as get_landscape. Report-only, same as everything else here -
+  // this flags candidates for merge_entity, it never merges anything itself.
+  const pool = section === 'shared'
+    ? entities.map((e) => ({ ...e, section }))
+    : entities.map((e) => ({ ...e, section })).concat(
+        db.prepare("SELECT id, name, updated_at FROM entities WHERE section = 'shared' AND name != ?")
+          .all(REPORT_ENTITY).map((e) => ({ ...e, section: 'shared' }))
+      );
+
   // change detection: skip entities untouched since last groom
   const lastRun = db.prepare('SELECT value FROM groom_meta WHERE key = ?').get(`last_groomed:${section}`);
   const lastRunTs = lastRun ? lastRun.value : null;
 
   let scanned = 0, skipped = 0;
+  const seenPairs = new Set();
   for (const e of entities) {
     if (lastRunTs && e.updated_at <= lastRunTs) { skipped++; continue; }
     scanned++;
     const dupes = findDupes(e.id);
     for (const d of dupes) {
       findings.push(`NEAR-DUPE in "${e.name}": obs ${d.a} vs obs ${d.b} (${d.sim}% similar) — review and remove one.`);
+    }
+
+    // possible duplicate ENTITY (name-level, not observation-level) - only
+    // meaningful with >=2 real tokens per side, else short names like
+    // "Atlas" and "c-atlas" tokenize identically and flood the report
+    const na = tokens(e.name);
+    if (na.size < 2) continue;
+    for (const o of pool) {
+      if (o.id === e.id) continue;
+      const pairKey = `${Math.min(e.id, o.id)}-${Math.max(e.id, o.id)}`;
+      if (seenPairs.has(pairKey)) continue;
+      const nb = tokens(o.name);
+      if (nb.size < 2) continue;
+      const sim = jaccard(na, nb);
+      if (sim >= NAME_SIM_THRESHOLD) {
+        seenPairs.add(pairKey);
+        findings.push(`POSSIBLE DUPLICATE ENTITY NAMES: "${e.name}" (${section}) <-> "${o.name}" (${o.section}) — ${Math.round(sim * 100)}% name-similar. Pull get_entity on both before acting - merge_entity if real, leave alone if related-but-distinct.`);
+      }
     }
   }
 
