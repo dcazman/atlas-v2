@@ -546,11 +546,10 @@ function renderBoard() {
   const remRows = reminders.map((r, i) =>
     `<tr><td class="pos">${i + 1}</td><td class="id">${r.id}</td><td>${esc(r.content)}</td><td class="sp">${esc(r.trigger_date || '')}${r.trigger_time ? ' ' + esc(r.trigger_time) : ''}</td><td class="src">${esc(r.entity || '')}</td><td class="age">${boardDaysSince(r.created_at)}</td></tr>`
   ).join('');
-  // Done workers stay on the tab (greyed, after the live ones) — same pattern
-  // as closed board rows crossing out in place instead of vanishing.
+  // Done workers are OFF the tab (Dan, Aug 20: "who cares about dead
+  // workers") - retained in the store, worker_list include_done for history.
   const liveWorkers = workers.filter((w) => w.status !== 'done');
-  const doneWorkers = workers.filter((w) => w.status === 'done');
-  const workerRows = [...liveWorkers, ...doneWorkers].map((w) => {
+  const workerRows = liveWorkers.map((w) => {
     const rel = parseRelated(w.related);
     const tickets = rel.length ? rel.map((k) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(k)}" target="_blank" rel="noopener">${esc(k)}</a>`).join('<br>') : '';
     return `<tr${w.status === 'done' ? ' class="closed"' : ''}><td>${esc(w.name)}</td><td>${workerBadge(w.status)}</td><td class="tk">${tickets}</td><td>${esc(w.title)}</td><td class="id">${w.obs_id ?? ''}</td><td class="age">${boardDaysSince(w.updated_at)}</td></tr>`;
