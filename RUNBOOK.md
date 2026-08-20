@@ -146,6 +146,19 @@ Contemporaneous records, newest first. These are snapshots of what was true on
 the day — they are **not** maintained, and anything operational in them is
 superseded by the sections above.
 
+### 2026-08-20 (later): search-gated creation + merge_entity (v24) deployed
+entity_aliases table added. add_observation/upsert_entity now redirect silently when the name being
+created is a known dead alias (set by merge_entity), and surface similar_entities (non-blocking) when
+the name is merely close to an existing one. New tool merge_entity(section, from, into) - copies
+unprotected obs with a "MERGED IN from X" prefix, moves protected obs as-is (keeps id+flag), records
+the alias, deletes the empty source. Second half of the Aug 19 dedup plan; first half (manual pass:
+removed 1 empty stub, pruned 58 zero-content Worker Sessions stubs, hand-checked 5 near-dupe
+candidates - all deliberate, none merged) was done directly against the DB, no deploy needed. Full
+writeup in README.md.
+Same deploy gotcha as the v23 entry below (env_file path) - already worked around, .env mirror still
+in place. Both build and compose-recreate commands reported client-side timeouts again but completed
+fine underneath - verify via container start-time + health check + source hash, don't trust the error.
+
 ### 2026-08-20: core memory tier (v23) deployed
 entities.core flag added. get_landscape now returns only core=1 entities + due reminders by
 default (view: "core"); all=true still gives the old full-dump behavior (view: "all"). New tools

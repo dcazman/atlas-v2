@@ -528,3 +528,55 @@ still matters, so nothing should evict itself silently).
 *Shipped 2026-08-20. Talk-only design session first (MemGPT vs MemoryBank
 research, the "now / area" chess analogy), explicit build only after Dan
 said go.*
+
+# Search-gated creation + merge_entity — SHIPPED (2026-08-20)
+
+Second half of the Aug 19 dedup plan (shared entity "Atlas Duplicate
+Prevention & Cleanup Plan (Design)", obs 1445). First half was a manual
+cleanup pass done directly against the DB the same session (see that
+entity's obs 1466 for the log): removed one genuine empty stub entity,
+pruned 58 zero-content "Worker Sessions" stubs (102→44 observations),
+hand-checked 5 flagged near-dupe name pairs and found all were deliberate
+splits (parent topic vs. worker-thread log, or a curated shared-section
+digest explicitly citing its work-section source) rather than accidental
+duplication - none needed merging.
+
+**What it is:** two independent, non-blocking guards on entity creation,
+plus the tool to act on what they catch.
+
+- `entity_aliases` table (v24 migration) — `(section, dead_name,
+  canonical_name)`. Written by `merge_entity`, read by `ensureEntityChecked`.
+- **Alias check (settled):** if the name being created is a known dead
+  alias, the write redirects silently to the surviving entity - this is a
+  past decision, not a new judgment call, so no warning needed, it just
+  works.
+- **Similarity check (not settled):** if the name is merely *close* to an
+  existing same-section-or-shared entity (Jaccard ≥0.5 on name tokens), the
+  entity still gets created - never blocked - but the result carries
+  `similar_entities` so the caller can catch a near-dupe forming instead of
+  discovering it later. Could be a real duplicate or a genuinely distinct
+  topic; the caller decides, same as the manual review this session did.
+- Both `add_observation` and `upsert_entity` go through this gate
+  (`ensureEntityChecked` / the alias-check branch in `upsertEntity`) - no
+  change to their existing call signature or success path.
+- **`merge_entity(section, from, into)`** (new tool) — operationalizes the
+  plan's manual merge steps in one call: unprotected observations copy over
+  with a `MERGED IN from "X"` prefix; protected ones *move* (not copy) so
+  they keep their protection flag and original id; records the alias;
+  deletes the now-empty source entity. Verified in dry run: protected-obs
+  move preserved id+flag correctly, alias redirect worked silently on
+  recreation, merge into a nonexistent target/source errors cleanly instead
+  of partial-applying.
+
+**Deploy notes:** same process as the core-memory-tier deploy earlier today
+(build, `docker compose up -d --force-recreate` from the anchor-mcp
+container using the `.env` mirror already in place) - both commands
+reported a client-side timeout again but completed successfully underneath;
+verified via container start-time bump, health checks, and source hash
+match. This session's own MCP tool cache did not pick up `merge_entity` or
+the updated tool descriptions until restarted - same stale-schema pattern
+as the v23 deploy, not a new issue.
+
+*Shipped 2026-08-20, same session as the core memory tier, at Dan's explicit
+"why not now" - real system scale (82 work / 21 shared entities, not the
+plan's estimated "~2k") made same-day execution of both halves reasonable.*
