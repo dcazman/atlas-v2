@@ -126,15 +126,54 @@ function registerTools(server, auth) {
   guarded('get_landscape', {
     title: 'Get landscape',
     description:
-      'Get the current state of a section: every known entity (topic/project) and its observations (facts), ' +
-      'plus any due reminders (trigger_date today or earlier, not yet dismissed). ' +
-      'The "shared" section is automatically merged in - entities and reminders are tagged with their origin section. ' +
-      'Call this at the start of a conversation to get oriented on what is going on. ' +
-      'If reminders come back non-empty, surface them to the user near the top of your reply - ' +
-      'that is the whole point of a reminder. Dismiss one with dismiss_reminder once handled or acknowledged.',
-    inputSchema: { section: SECTION },
-  }, async ({ section }) => {
-    return json(db.getLandscape(section));
+      'Get the current bounded state of a section: only entities currently marked "core" (the working-memory ' +
+      'tier - see promote_entity/evict_entity) and their observations, plus any due reminders (trigger_date ' +
+      'today or earlier, not yet dismissed). The "shared" section is automatically merged in - entities and ' +
+      'reminders are tagged with their origin section. Call this at the start of a conversation to get oriented. ' +
+      'If reminders come back non-empty, surface them to the user near the top of your reply. ' +
+      'If what you need is not in this view, use search or get_entity by name before reaching for all=true - ' +
+      'a full dump is the worst case, not the normal path, and is the thing that used to return 670K+ chars.',
+    inputSchema: {
+      section: SECTION,
+      all: z.boolean().optional().describe(
+        'Bypass the core-only view and return every entity in the section (the old behavior). ' +
+        'Only use this when a scoped search/get_entity genuinely will not do - it can be huge.'
+      ),
+    },
+  }, async ({ section, all }) => {
+    return json(db.getLandscape(section, { all: !!all }));
+  });
+
+  guarded('promote_entity', {
+    title: 'Promote entity to core',
+    description:
+      'Move an entity into the "now" working-memory tier (core=1), so it shows up in get_landscape without ' +
+      'a full dump. Use when a topic just became active - e.g. it is what the current work is about. ' +
+      'This is deliberate, not automatic: nothing gets promoted just by being touched or created.',
+    inputSchema: {
+      section: SECTION,
+      name: z.string().describe('Entity name to promote, e.g. "DMARC policy".'),
+    },
+  }, async ({ section, name }) => {
+    const r = db.setEntityCore(section, name, true);
+    if (!r.ok) return text(`No entity named "${name}" in ${section}.`);
+    return text(`"${name}" is now in core (will appear in get_landscape).`);
+  });
+
+  guarded('evict_entity', {
+    title: 'Evict entity from core',
+    description:
+      'Move an entity out of the "now" working-memory tier (core=0) back to the archive, where it is still ' +
+      'fully intact - reachable via search or get_entity by name, just no longer in the default get_landscape ' +
+      'view. Use when a topic is no longer active (e.g. its board piece closed).',
+    inputSchema: {
+      section: SECTION,
+      name: z.string().describe('Entity name to evict, e.g. "DMARC policy".'),
+    },
+  }, async ({ section, name }) => {
+    const r = db.setEntityCore(section, name, false);
+    if (!r.ok) return text(`No entity named "${name}" in ${section}.`);
+    return text(`"${name}" evicted from core (still intact, reachable via search/get_entity).`);
   });
 
   guarded('get_entity', {

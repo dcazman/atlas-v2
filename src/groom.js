@@ -19,6 +19,7 @@ const SECTIONS = ['work', 'personal', 'shared'];
 const REPORT_ENTITY = 'Groom Report';
 const AUDIT_KEEP_DAYS = 90;
 const DORMANT_DAYS = 60;
+const CORE_STALE_DAYS = 5;
 const DISMISSED_REMINDER_DAYS = 90;
 const DUPE_THRESHOLD = 0.85;
 
@@ -69,6 +70,15 @@ function groomSection(section) {
   ).all(section, REPORT_ENTITY, `-${DORMANT_DAYS} days`);
   if (dormant.length) {
     findings.push(`DORMANT (${DORMANT_DAYS}+ days untouched): ${dormant.map(d => d.name).join('; ')}. Candidates for archive/summary-compression.`);
+  }
+
+  // stale core entities (report-only, same spirit as the rest of this file -
+  // eviction is a deliberate call, groom just flags candidates, never evicts)
+  const staleCore = db.prepare(
+    `SELECT name, updated_at FROM entities WHERE section = ? AND core = 1 AND updated_at < datetime('now', ?)`
+  ).all(section, `-${CORE_STALE_DAYS} days`);
+  if (staleCore.length) {
+    findings.push(`STALE CORE (${CORE_STALE_DAYS}+ days untouched, still in "now"): ${staleCore.map(d => d.name).join('; ')}. Candidates for evict_entity.`);
   }
 
   // long-dismissed reminders

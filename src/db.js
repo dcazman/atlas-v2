@@ -630,6 +630,16 @@ if (db.prepare('PRAGMA user_version').get().user_version < 21) {
   db.exec('PRAGMA user_version = 21');
 }
 
+// v23: entities.core - bounded "working memory" tier (Dan design conversation,
+// Aug 20 2026). get_landscape returns only core=1 entities by default instead
+// of the whole section; promote_entity/evict_entity toggle the flag. Nothing
+// is auto-promoted on creation - deliberate action only, mirroring MemGPT's
+// explicit core-memory model over MemoryBank's automatic decay-based one.
+if (db.prepare('PRAGMA user_version').get().user_version < 23) {
+  try { db.exec('ALTER TABLE entities ADD COLUMN core INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 23');
+}
+
 function findEntity(section, name) {
   return db.prepare('SELECT id, name, summary, updated_at FROM entities WHERE section = ? AND name = ?').get(section, name);
 }
@@ -647,10 +657,11 @@ function ensureEntity(section, name) {
   return entity;
 }
 
-function sectionEntities(section) {
-  const entities = db.prepare(
-    'SELECT id, name, summary, updated_at FROM entities WHERE section = ? ORDER BY updated_at DESC'
-  ).all(section);
+function sectionEntities(section, { coreOnly = false } = {}) {
+  const sql = coreOnly
+    ? 'SELECT id, name, summary, updated_at, core FROM entities WHERE section = ? AND core = 1 ORDER BY updated_at DESC'
+    : 'SELECT id, name, summary, updated_at, core FROM entities WHERE section = ? ORDER BY updated_at DESC';
+  const entities = db.prepare(sql).all(section);
 
   for (const e of entities) {
     e.section = section;
@@ -662,20 +673,33 @@ function sectionEntities(section) {
   return entities;
 }
 
-function getLandscape(section) {
+function setEntityCore(section, name, value) {
+  const entity = findEntity(section, name);
+  if (!entity) return { ok: false, reason: 'not_found' };
+  db.prepare('UPDATE entities SET core = ? WHERE id = ?').run(value ? 1 : 0, entity.id);
+  return { ok: true, name, core: value ? 1 : 0 };
+}
+
+// get_landscape's default view: the bounded "now" tier (core=1 entities) plus
+// due reminders, never the whole section. Pass { all: true } for the
+// deliberate full-dump fallback - the worst case, not the normal path. See
+// v23 migration note above for why: this call was the actual source of the
+// oversized (670K+ char) responses, not entity count or observation size.
+function getLandscape(section, { all = false } = {}) {
   // Own section + shared merged: any landscape pull automatically sees shared.
   // Entities and reminders are tagged with their origin section.
-  let entities = sectionEntities(section);
+  const opts = { coreOnly: !all };
+  let entities = sectionEntities(section, opts);
   let reminders = getActiveReminders(section).map((r) => ({ ...r, section }));
 
   if (section !== 'shared') {
-    entities = entities.concat(sectionEntities('shared'));
+    entities = entities.concat(sectionEntities('shared', opts));
     reminders = reminders.concat(
       getActiveReminders('shared').map((r) => ({ ...r, section: 'shared' }))
     );
   }
 
-  return { reminders, entities };
+  return { reminders, entities, view: all ? 'all' : 'core' };
 }
 
 function getEntity(section, name) {
@@ -1469,6 +1493,7 @@ module.exports = {
   getEntity,
   upsertEntity,
   removeEntity,
+  setEntityCore,
   addObservation,
   getObservation,
   getObservationsByIds,
