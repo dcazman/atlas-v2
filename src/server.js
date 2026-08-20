@@ -613,8 +613,9 @@ function renderBoard() {
   td.last-comment .muted{color:#4b5563}
   tr.zonehdr td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;padding:16px 10px 6px;border-bottom:2px solid #313846;background:#0f1115}
   tr.zh-active td{color:#7ab3ff}
-  #thstatus{cursor:pointer;user-select:none}
-  #thstatus.sorted{color:#e0b24a}
+  .sortctl{margin:10px 0 -2px;display:flex;align-items:center;gap:8px;font-size:12px;color:#8b94a3}
+  .sortctl select{background:#1a1f29;color:#cfd6e2;border:1px solid #2a2f3a;border-radius:6px;padding:4px 8px;font-size:12px}
+  .sortctl select.sorted{border-color:#e0b24a;color:#ffd77a}
   tr.zh-sprint td{color:#86efac}
   tr.zh-backlog td{color:#fde68a}
   tr.pinned td{box-shadow:inset 3px 0 0 #e0b24a}
@@ -663,7 +664,8 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <div id="board" class="panel on">
   ${runwayPlan.sprint ? `<div style="margin:14px 0 0;font-size:13px;color:#9fb0c3">Sprint ${esc(runwayPlan.sprint)}: <b>${runwayPlan.open} open</b>${runwayPlan.days_left != null ? ` &middot; <b>${runwayPlan.days_left} weekday${runwayPlan.days_left === 1 ? '' : 's'} left</b> (ends ${esc(runwayPlan.sprint_end)})` : ' &middot; <span style="color:#fde68a">end date unknown &mdash; board_sprint_meta or ask Dan</span>'}${runwayPlan.days_left > 0 && runwayPlan.open / runwayPlan.days_left > 2.5 ? ' <span style="color:#fde68a">&mdash; over the ~2-3/day pace, something gets cut</span>' : ''}</div>` : ''}
-  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th id="thstatus" onclick="toggleStatusSort()" title="Click: sort the ACTIVE sprint by status (in progress → on hold → todo → done). Click again: back to board order. Other blocks never move; Slot numbers stay frozen.">Status&nbsp;&#8645;</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
+  ${body ? `<div class="sortctl"><label for="sortsel">Sort active sprint&nbsp;ⓘ</label><select id="sortsel" onchange="onSortChange(this.value)" title="Reorders the ACTIVE sprint block only - a view reorder. Slot numbers stay frozen; other blocks never move."><option value="none">Board order</option><option value="status">Status (in progress &rarr; on hold &rarr; todo &rarr; done)</option><option value="age_desc">Age, oldest first</option><option value="age_asc">Age, newest first</option><option value="title">Title, A&rarr;Z</option></select></div>` : ''}
+  ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 
 <div id="pending" class="panel">
@@ -686,17 +688,21 @@ ${orderBand(live, computeSlotMap())}
 // Status sort, ACTIVE sprint block only (Dan, Aug 19): a VIEW reorder - Slot
 // numbers stay frozen, other blocks never move. Order when on: in progress,
 // on hold, todo, done. Persisted so the 30s reload keeps it.
-var statusSorted=false;try{statusSorted=localStorage.getItem('atlasSortStatus')==='1';}catch(e){}
+var sortField='none';try{sortField=localStorage.getItem('atlasSortField')||'none';}catch(e){}
 var segOrig=null;
 function activeSeg(){var tb=document.querySelector('#board tbody');if(!tb)return null;var rows=Array.prototype.slice.call(tb.children);var s=-1,e=rows.length;for(var i=0;i<rows.length;i++){var r=rows[i];if(r.classList.contains('zonehdr')){if(r.classList.contains('zh-active')){s=i+1;}else if(s>=0){e=i;break;}}}if(s<0)return null;return{tb:tb,rows:rows,s:s,e:e};}
-function applyStatusSort(){var a=activeSeg();if(!a)return;var seg=a.rows.slice(a.s,a.e);if(!segOrig)segOrig=seg.slice();
-  var rk=function(r){var b=r.querySelector('.b');if(!b)return 9;if(b.classList.contains('b-in_progress'))return 0;if(b.classList.contains('b-on_hold'))return 1;if(b.classList.contains('b-todo'))return 2;if(b.classList.contains('b-done'))return 3;return 9;};
-  var sorted=seg.slice().sort(function(x,y){var d=rk(x)-rk(y);return d!==0?d:seg.indexOf(x)-seg.indexOf(y);});
+function rowAge(r){var c=r.querySelector('td.age');if(!c)return 0;var m=/(-?\d+)/.exec(c.textContent);return m?parseInt(m[1],10):0;}
+function rowTitle(r){var c=r.children[1];return c?c.textContent.trim().toLowerCase():'';}
+function statusRank(r){var b=r.querySelector('.b');if(!b)return 9;if(b.classList.contains('b-in_progress'))return 0;if(b.classList.contains('b-on_hold'))return 1;if(b.classList.contains('b-todo'))return 2;if(b.classList.contains('b-done'))return 3;return 9;}
+var SORTERS={status:function(x,y){return statusRank(x)-statusRank(y);},age_desc:function(x,y){return rowAge(y)-rowAge(x);},age_asc:function(x,y){return rowAge(x)-rowAge(y);},title:function(x,y){return rowTitle(x).localeCompare(rowTitle(y));}};
+function applySort(){var a=activeSeg();if(!a)return;var seg=a.rows.slice(a.s,a.e);if(!segOrig)segOrig=seg.slice();
   var anchor=a.rows[a.e]||null;
-  (statusSorted?sorted:segOrig).forEach(function(r){a.tb.insertBefore(r,anchor);});
-  var t=document.getElementById('thstatus');if(t)t.classList.toggle('sorted',statusSorted);}
-function toggleStatusSort(){statusSorted=!statusSorted;try{localStorage.setItem('atlasSortStatus',statusSorted?'1':'0');}catch(e){}applyStatusSort();}
-if(statusSorted)applyStatusSort();
+  var cmp=SORTERS[sortField];
+  var out=cmp?seg.slice().sort(function(x,y){var d=cmp(x,y);return d!==0?d:seg.indexOf(x)-seg.indexOf(y);}):segOrig;
+  out.forEach(function(r){a.tb.insertBefore(r,anchor);});
+  var s=document.getElementById('sortsel');if(s){s.value=sortField;s.classList.toggle('sorted',sortField!=='none');}}
+function onSortChange(v){sortField=v;try{localStorage.setItem('atlasSortField',sortField);}catch(e){}applySort();}
+applySort();
 function setStickyH(){var s=document.getElementById('stickytop');if(s)document.documentElement.style.setProperty('--stickyh',s.offsetHeight+'px');}
 window.addEventListener('resize',setStickyH);
 setStickyH();
