@@ -667,7 +667,7 @@ ${orderBand(live, computeSlotMap())}
 </div>
 <div id="board" class="panel on">
   ${runwayPlan.sprint ? `<div style="margin:14px 0 0;font-size:13px;color:#9fb0c3">Sprint ${esc(runwayPlan.sprint)}: <b>${runwayPlan.open} open</b>${runwayPlan.days_left != null ? ` &middot; <b>${runwayPlan.days_left} weekday${runwayPlan.days_left === 1 ? '' : 's'} left</b> (ends ${esc(runwayPlan.sprint_end)})` : ' &middot; <span style="color:#fde68a">end date unknown &mdash; board_sprint_meta or ask Dan</span>'}${runwayPlan.days_left > 0 && runwayPlan.open / runwayPlan.days_left > 2.5 ? ' <span style="color:#fde68a">&mdash; over the ~2-3/day pace, something gets cut</span>' : ''}</div>` : ''}
-  ${body ? `<div class="sortctl"><label for="sortsel">Sort active sprint&nbsp;ⓘ</label><select id="sortsel" onchange="onSortChange(this.value)" title="Reorders the ACTIVE sprint block only - a view reorder. Slot numbers stay frozen; other blocks never move."><option value="none">Board order</option><option value="status">Status (in progress &rarr; todo &rarr; on hold &rarr; done)</option><option value="age_desc">Age, oldest first</option><option value="age_asc">Age, newest first</option><option value="title">Title, A&rarr;Z</option></select></div>` : ''}
+  ${body ? `<div class="sortctl"><label for="sortsel">Sort active sprint&nbsp;ⓘ</label><select id="sortsel" onchange="onSortChange(this.value)" title="Reorders the ACTIVE sprint block only - a view reorder. Slot numbers stay frozen; other blocks never move."><option value="none">Board order</option><option value="status_todo">Status, todo first</option><option value="status_on_hold">Status, on hold first</option><option value="status_in_progress">Status, in progress first</option><option value="age_desc">Age, oldest first</option><option value="age_asc">Age, newest first</option><option value="title">Title, A&rarr;Z</option></select></div>` : ''}
   ${body ? `<table><thead><tr><th title="Frozen per-sprint slot - THE number Dan speaks in chat to move/close a piece (active sprint block by default; name the block for others). Corrected Aug 10 - see ATLAS.md / SPEC-tray-and-commands.md.">Slot&nbsp;ⓘ</th><th>Title</th><th>Status</th><th>Sprint</th><th>Tickets</th><th title="Claude's OWN internal note/context - NOT a mirror of the Jira ticket, can go stale (obs 1086).">Note&nbsp;ⓘ</th><th title="The actual last Jira comment - live ticket-side truth. Not yet populated by anyone (danfeed follow-up, obs 1086/1087) - blank until then.">Last&nbsp;Comment&nbsp;ⓘ</th><th>Age</th></tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">No live pieces.</div>`}
 </div>
 
@@ -689,15 +689,19 @@ ${orderBand(live, computeSlotMap())}
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
 // Status sort, ACTIVE sprint block only (Dan, Aug 19): a VIEW reorder - Slot
-// numbers stay frozen, other blocks never move. Order when on: in progress,
-// on hold, todo, done. Persisted so the 30s reload keeps it.
-var sortField='status';try{sortField=localStorage.getItem('atlasSortField')||'status';}catch(e){}
+// numbers stay frozen, other blocks never move. Three variants (Dan, Aug 21):
+// each puts its status on top, the rest follow in the usual order, done last.
+// Persisted so the 30s reload keeps it; old saved 'status' maps to in-progress.
+var sortField='status_in_progress';try{sortField=localStorage.getItem('atlasSortField')||'status_in_progress';}catch(e){}
+if(sortField==='status')sortField='status_in_progress';
 var segOrig=null;
 function activeSeg(){var tb=document.querySelector('#board tbody');if(!tb)return null;var rows=Array.prototype.slice.call(tb.children);var s=-1,e=rows.length;for(var i=0;i<rows.length;i++){var r=rows[i];if(r.classList.contains('zonehdr')){if(r.classList.contains('zh-active')){s=i+1;}else if(s>=0){e=i;break;}}}if(s<0)return null;return{tb:tb,rows:rows,s:s,e:e};}
 function rowAge(r){var c=r.querySelector('td.age');if(!c)return 0;var m=/(-?\d+)/.exec(c.textContent);return m?parseInt(m[1],10):0;}
 function rowTitle(r){var c=r.children[1];return c?c.textContent.trim().toLowerCase():'';}
-function statusRank(r){var b=r.querySelector('.b');if(!b)return 9;if(b.classList.contains('b-in_progress'))return 0;if(b.classList.contains('b-todo'))return 1;if(b.classList.contains('b-on_hold'))return 2;if(b.classList.contains('b-done'))return 3;return 9;}
-var SORTERS={status:function(x,y){return statusRank(x)-statusRank(y);},age_desc:function(x,y){return rowAge(y)-rowAge(x);},age_asc:function(x,y){return rowAge(x)-rowAge(y);},title:function(x,y){return rowTitle(x).localeCompare(rowTitle(y));}};
+function statusOf(r){var b=r.querySelector('.b');if(!b)return null;if(b.classList.contains('b-in_progress'))return 'in_progress';if(b.classList.contains('b-todo'))return 'todo';if(b.classList.contains('b-on_hold'))return 'on_hold';if(b.classList.contains('b-done'))return 'done';return null;}
+var STATUS_ORDERS={status_in_progress:['in_progress','todo','on_hold','done'],status_todo:['todo','in_progress','on_hold','done'],status_on_hold:['on_hold','in_progress','todo','done']};
+function statusSorter(key){return function(x,y){var o=STATUS_ORDERS[key];var xi=o.indexOf(statusOf(x)),yi=o.indexOf(statusOf(y));return (xi<0?9:xi)-(yi<0?9:yi);};}
+var SORTERS={status_in_progress:statusSorter('status_in_progress'),status_todo:statusSorter('status_todo'),status_on_hold:statusSorter('status_on_hold'),age_desc:function(x,y){return rowAge(y)-rowAge(x);},age_asc:function(x,y){return rowAge(x)-rowAge(y);},title:function(x,y){return rowTitle(x).localeCompare(rowTitle(y));}};
 function applySort(){var a=activeSeg();if(!a)return;var seg=a.rows.slice(a.s,a.e);if(!segOrig)segOrig=seg.slice();
   var anchor=a.rows[a.e]||null;
   var cmp=SORTERS[sortField];
