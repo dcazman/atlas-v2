@@ -28,6 +28,10 @@ operational sections *and* append a dated entry to the history log.
 this host, so any procedure that says `docker start atlas` is dead — see
 Rollback for what actually works now.
 
+**Leaving the current job someday?** See `EXIT-DAY.md` in this repo — burning
+the `work` section's data, triaging `shared`, and confirming `work` comes back
+usable (board included) with no redeploy needed.
+
 **This anchor-mcp container cannot see `/mnt/user`.** To reach appdata, go
 through docker:
 
