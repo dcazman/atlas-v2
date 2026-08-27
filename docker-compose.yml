@@ -7,7 +7,7 @@ services:
       - "7790:7784"
       - "7795:7795"
     env_file:
-      - /mnt/user/warehouse/atlas-v2/.env
+      - /warehouse/atlas-v2/.env
     environment:
       - PORT=7784
       - BOARD_PORT=7795
