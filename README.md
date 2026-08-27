@@ -340,7 +340,7 @@ stored in `board_rows.queue_pos` (migration v18, NULL = not queued). Renders
 as a grey band under the In Progress strip, pieces in queue sequence with
 their normal frozen Slot numbers; hidden when empty. **Pure intention:** Jira
 is never touched, statuses and frozen Slots never change. A piece drops out
-automatically when pinned (`board_bump`/`board_move`), closed, or offboarded
+automatically when pinned (`board_pin`, or `board_bump`/`board_move` directly), closed, or offboarded
 (the rest keep their relative order); On Hold keeps it. `/api` exposes a
 top-level `order` array (row ids, queue sequence) and per-piece `queue_pos` —
 both additive, the existing shape is unchanged.
