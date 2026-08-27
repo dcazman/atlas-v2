@@ -685,6 +685,19 @@ ${orderBand(live, computeSlotMap())}
   ${workerRows ? `<table><thead><tr><th>Name</th><th>Status</th><th>Ticket(s)</th><th>Task</th><th>Obs&nbsp;#</th><th>Age</th></tr></thead><tbody>${workerRows}</tbody></table>` : `<div class="empty">No workers.</div>`}
   <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Skills Directory</h3>
   ${skillRows ? `<table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>${skillRows}</tbody></table>` : `<div class="empty">No skills found.</div>`}
+  <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Commands</h3>
+  <div style="font-size:12px;color:#8b94a3;margin-bottom:10px">Dan's shorthand, typed in chat to the Claude Code conductor session &mdash; not into this view (read-only). Reference only.</div>
+  <table><thead><tr><th>Token</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td class="tk">d</td><td>alone on its own line &mdash; discuss only, take no action (reads are fine, no board/tray/Jira writes)</td></tr>
+    <tr><td class="tk">b</td><td>numbers refer to the BOARD (a board line / running Slot number). A bare number defaults to the board.</td></tr>
+    <tr><td class="tk">t</td><td>numbers refer to the TRAY (pending item position, oldest-first)</td></tr>
+    <tr><td class="tk">re</td><td>numbers refer to RESEARCH items (oldest-first)</td></tr>
+    <tr><td class="tk">r</td><td>numbers refer to the REMINDERS tab</td></tr>
+    <tr><td class="tk">dis</td><td>dismiss, e.g. <code>dis t 4</code> = dismiss tray item 4</td></tr>
+    <tr><td class="tk">p</td><td>pin (move to In Progress + reorder), e.g. <code>p b 1</code> = pin board item 1</td></tr>
+    <tr><td class="tk">m / M</td><td>move to a sprint, e.g. <code>25 PCT-16204 M to 18</code> = move that piece to Sprint 18</td></tr>
+  </tbody></table>
+  <div style="font-size:12px;color:#8b94a3;margin-top:10px">Examples: <code>dis re 2</code> (dismiss research item 2) &middot; <code>p b 1</code> (pin board item 1) &middot; <code>d</code> (discuss only, no action)</div>
 </div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
