@@ -725,6 +725,24 @@ function registerTools(server, auth) {
     return json(r);
   });
 
+  guarded('board_pin', {
+    title: 'Pin a board piece and start it',
+    description:
+      'Dan "pin N": the one-call atomic replacement for "work on N" - bumps the piece to the top of ' +
+      'the board AND sets status=in_progress in a single handler, so the two used to always be done as ' +
+      'separate board_bump + board_update({status}) calls, and a caller could do one without the other ' +
+      '(or reorder something else along the way). Use this whenever Dan says "pin" - it is NOT ' +
+      'board_move: board_move is a different verb (pure reordering to a Dan-named slot within the ' +
+      'pinned band, status untouched) for when Dan explicitly names a target slot rather than saying "pin".',
+    inputSchema: { section: SECTION, row_id: z.number().int() },
+  }, async ({ section, row_id }) => {
+    const r = db.bumpBoardRow(section, row_id);
+    if (!r.ok) return text(`No board piece ${row_id} in ${section}.`);
+    const u = db.updateBoardRow(section, row_id, { status: 'in_progress' });
+    if (!u.ok) return text(`No board piece ${row_id} in ${section}.`);
+    return json({ ok: true, pinned: row_id, status: 'in_progress' });
+  });
+
   guarded('board_order', {
     title: "Declare Dan's work order (ORDER band)",
     description:
