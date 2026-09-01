@@ -1142,6 +1142,104 @@ function registerTools(server, auth) {
     if (!r.ok) return text(`No worker ${worker_id} in ${section}.`);
     return json(r);
   });
+
+  // -------------------------------------------------------------------------
+  // EPICS TAB (v25, Dan design conversation Sep 1 2026). Two halves: the
+  // catalog (real Epic/Capability tickets, synced on demand - the conductor
+  // does its own JQL pull and hands the list here, never danfeed's live
+  // poll) and proposals (candidate new epics an /epics scan produces, same
+  // propose-then-adjudicate shape as pending_items/research_items).
+  // -------------------------------------------------------------------------
+  guarded('epic_catalog_sync', {
+    title: 'Sync the Epics catalog',
+    description:
+      'Upsert real Jira Epic/Capability tickets into the Epics tab catalog. The conductor pulls these via its ' +
+      'own JQL (Jira access lives in the conductor thread only) and hands the whole list here; each item is ' +
+      'upserted by jira_key so a re-sync just refreshes status/title/parent in place. On demand only - not ' +
+      'wired into danfeed\'s live poll.',
+    inputSchema: {
+      section: SECTION,
+      items: z.array(z.object({
+        jira_key: z.string(),
+        kind: z.enum(['epic', 'capability']),
+        title: z.string(),
+        status: z.string().optional(),
+        parent_key: z.string().optional().describe('For an epic: the Capability it rolls up to (Jira\'s native `parent` field). Omit for capabilities.'),
+        child_count: z.number().int().optional().describe('For a capability: how many epic children it has (informational).'),
+      })).describe('The full Epic/Capability list from this pull - each item upserted by jira_key.'),
+    },
+  }, async ({ section, items }) => {
+    return json(db.syncEpicsCatalog(section, items));
+  });
+
+  guarded('epic_catalog_list', {
+    title: 'List the Epics catalog',
+    description: 'List real Epic/Capability tickets in the Epics tab catalog, as of the last sync.',
+    inputSchema: { section: SECTION },
+  }, async ({ section }) => {
+    return json(db.listEpicsCatalog(section));
+  });
+
+  guarded('epic_proposal_add', {
+    title: 'Add an epic proposal',
+    description:
+      'Record one cluster proposal from an /epics scan: the ticket keys, a suggested epic name, the rationale ' +
+      'grounded in real ticket text, and which Capability it belongs under (an existing key, or flag ' +
+      'needs_new_capability). Fingerprint (sorted ticket keys) is computed here - re-adding the same cluster ' +
+      'returns the existing proposal instead of duplicating it, so old no\'s never resurface.',
+    inputSchema: {
+      section: SECTION,
+      ticket_keys: z.array(z.string()).min(3).describe('The story keys in this cluster (3 or more).'),
+      suggested_epic_name: z.string().optional(),
+      suggested_capability_key: z.string().optional().describe('An existing Capability key this epic should roll up to, if one fits.'),
+      needs_new_capability: z.boolean().optional().describe('True if no existing Capability fits and a new one is needed.'),
+      rationale: z.string().describe('One line, grounded in the actual ticket text - no invented themes.'),
+    },
+  }, async ({ section, ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale }) => {
+    return json(db.addEpicProposal(section, { ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale }));
+  });
+
+  guarded('epic_proposal_list', {
+    title: 'List epic proposals',
+    description:
+      'List epic cluster proposals for a section. Hides approved/rejected/executed by default (same pattern ' +
+      'as worker_list); pass include_resolved for the full history.',
+    inputSchema: {
+      section: SECTION,
+      include_resolved: z.boolean().optional().describe('Include approved/rejected/executed proposals too (default false).'),
+    },
+  }, async ({ section, include_resolved }) => {
+    return json(db.listEpicProposals(section, include_resolved));
+  });
+
+  guarded('epic_proposal_update', {
+    title: 'Update an epic proposal',
+    description:
+      'Move a proposal through its lifecycle - approved/rejected (with decision_note), or executed once the ' +
+      'conductor has actually created the epic (and Capability, if new) in Jira. decided_at stamps ' +
+      'automatically the moment status leaves "proposed" (same trigger pattern as pending_items).',
+    inputSchema: {
+      section: SECTION,
+      proposal_id: z.number().int(),
+      status: z.enum(['approved', 'rejected', 'executed']).optional(),
+      decision_note: z.string().optional().describe('Why approved/rejected, if Dan gave a reason.'),
+      suggested_capability_key: z.string().optional(),
+      needs_new_capability: z.boolean().optional(),
+      executed_epic_key: z.string().optional().describe('The new epic\'s key, once created.'),
+      executed_capability_key: z.string().optional().describe('The new Capability\'s key, once created (if one was needed).'),
+    },
+  }, async ({ section, proposal_id, status, decision_note, suggested_capability_key, needs_new_capability, executed_epic_key, executed_capability_key }) => {
+    const fields = {};
+    if (status !== undefined) fields.status = status;
+    if (decision_note !== undefined) fields.decision_note = decision_note;
+    if (suggested_capability_key !== undefined) fields.suggested_capability_key = suggested_capability_key;
+    if (needs_new_capability !== undefined) fields.needs_new_capability = needs_new_capability;
+    if (executed_epic_key !== undefined) fields.executed_epic_key = executed_epic_key;
+    if (executed_capability_key !== undefined) fields.executed_capability_key = executed_capability_key;
+    const r = db.updateEpicProposal(section, proposal_id, fields);
+    if (!r.ok) return text(`No epic proposal ${proposal_id} in ${section}.`);
+    return json(r);
+  });
 }
 
 module.exports = { registerTools };

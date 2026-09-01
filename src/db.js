@@ -663,6 +663,68 @@ if (db.prepare('PRAGMA user_version').get().user_version < 24) {
   db.exec('PRAGMA user_version = 24');
 }
 
+// v25: EPICS TAB (Dan design conversation, Sep 1 2026). Two tables for the two
+// halves Dan described: epics_catalog mirrors real Jira Epic/Capability
+// tickets (synced ON DEMAND by the conductor's own JQL pull - deliberately
+// NOT wired into danfeed's live poll, since this is a browse catalog, not
+// daily work, and keeps a stable/carefully-iterated file untouched);
+// epic_proposals holds candidate new epics an /epics scan produces, same
+// propose-then-adjudicate shape as pending_items/research_items. Confirmed
+// against live Jira data (not assumed): Story->Epic is the Epic Link field
+// (customfield_10014); Epic->Capability is Jira's native `parent` field
+// (Epic hierarchyLevel 1, Capability hierarchyLevel 2).
+if (db.prepare('PRAGMA user_version').get().user_version < 25) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS epics_catalog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      jira_key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('epic','capability')),
+      title TEXT NOT NULL,
+      status TEXT,
+      parent_key TEXT,
+      child_count INTEGER,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(section, jira_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_epics_catalog_section ON epics_catalog(section);
+    CREATE TRIGGER IF NOT EXISTS epics_catalog_touch
+      AFTER UPDATE ON epics_catalog FOR EACH ROW
+      BEGIN UPDATE epics_catalog SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+    CREATE TABLE IF NOT EXISTS epic_proposals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL CHECK (section IN ('work','personal','shared')),
+      fingerprint TEXT NOT NULL,
+      ticket_keys TEXT NOT NULL CHECK (json_valid(ticket_keys)),
+      suggested_epic_name TEXT,
+      suggested_capability_key TEXT,
+      needs_new_capability INTEGER NOT NULL DEFAULT 0,
+      rationale TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','approved','rejected','executed')),
+      decision_note TEXT,
+      executed_epic_key TEXT,
+      executed_capability_key TEXT,
+      scan_date TEXT NOT NULL DEFAULT (datetime('now')),
+      decided_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(section, fingerprint)
+    );
+    CREATE INDEX IF NOT EXISTS idx_epic_proposals_section_status ON epic_proposals(section, status);
+    CREATE TRIGGER IF NOT EXISTS epic_proposals_touch
+      AFTER UPDATE ON epic_proposals FOR EACH ROW
+      BEGIN UPDATE epic_proposals SET updated_at = datetime('now') WHERE id = NEW.id; END;
+    CREATE TRIGGER IF NOT EXISTS epic_proposals_resolve
+      AFTER UPDATE OF status ON epic_proposals FOR EACH ROW
+      WHEN OLD.status = 'proposed' AND NEW.status <> 'proposed'
+      BEGIN UPDATE epic_proposals SET decided_at = datetime('now') WHERE id = NEW.id; END;
+  `);
+  db.exec('PRAGMA user_version = 25');
+}
+
 function nameTokens(s) {
   return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
 }
@@ -1622,6 +1684,76 @@ function closeWorker(section, id) {
   return updateWorker(section, id, { status: 'done' });
 }
 
+// -------------------------------------------------------------------------
+// EPICS CATALOG (v25) - real Jira Epic/Capability tickets. The conductor does
+// its own JQL pull and hands the whole list here; this upserts by (section,
+// jira_key) so a re-sync just refreshes status/title/parent_key in place.
+// -------------------------------------------------------------------------
+function syncEpicsCatalog(section, items) {
+  const upsert = db.prepare(`
+    INSERT INTO epics_catalog (section, jira_key, kind, title, status, parent_key, child_count, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(section, jira_key) DO UPDATE SET
+      kind = excluded.kind, title = excluded.title, status = excluded.status,
+      parent_key = excluded.parent_key, child_count = excluded.child_count,
+      synced_at = datetime('now')
+  `);
+  let synced = 0;
+  for (const it of items) {
+    upsert.run(section, it.jira_key, it.kind, it.title, it.status ?? null, it.parent_key ?? null, it.child_count ?? null);
+    synced++;
+  }
+  return { synced };
+}
+
+function listEpicsCatalog(section) {
+  return db.prepare('SELECT * FROM epics_catalog WHERE section = ? ORDER BY kind, jira_key').all(section);
+}
+
+// -------------------------------------------------------------------------
+// EPIC PROPOSALS (v25) - candidate new epics from an /epics scan. fingerprint
+// (sorted ticket keys, joined) is the dedup key: a re-scan that produces the
+// same cluster hits the UNIQUE constraint and returns the existing row
+// instead of creating a duplicate, so old no's never resurface.
+// -------------------------------------------------------------------------
+function addEpicProposal(section, { ticket_keys, suggested_epic_name, suggested_capability_key = null, needs_new_capability = false, rationale }) {
+  const fingerprint = [...ticket_keys].sort().join(',');
+  const existing = db.prepare('SELECT id FROM epic_proposals WHERE section = ? AND fingerprint = ?').get(section, fingerprint);
+  if (existing) return { proposal_id: existing.id, already_existed: true };
+  const info = db.prepare(`
+    INSERT INTO epic_proposals (section, fingerprint, ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(section, fingerprint, JSON.stringify(ticket_keys), suggested_epic_name ?? null, suggested_capability_key, needs_new_capability ? 1 : 0, rationale);
+  return { proposal_id: info.lastInsertRowid, already_existed: false };
+}
+
+function listEpicProposals(section, includeResolved) {
+  const sql = includeResolved
+    ? 'SELECT * FROM epic_proposals WHERE section = ? ORDER BY created_at ASC, id ASC'
+    : "SELECT * FROM epic_proposals WHERE section = ? AND status = 'proposed' ORDER BY created_at ASC, id ASC";
+  return db.prepare(sql).all(section);
+}
+
+function getEpicProposal(section, id) {
+  return db.prepare('SELECT * FROM epic_proposals WHERE id = ? AND section = ?').get(id, section);
+}
+
+function updateEpicProposal(section, id, fields = {}) {
+  const row = getEpicProposal(section, id);
+  if (!row) return { ok: false, reason: 'not_found' };
+  const sets = [], vals = [];
+  if (fields.status !== undefined)                   { sets.push('status = ?');                   vals.push(fields.status); }
+  if (fields.decision_note !== undefined)             { sets.push('decision_note = ?');             vals.push(fields.decision_note); }
+  if (fields.suggested_capability_key !== undefined)  { sets.push('suggested_capability_key = ?');  vals.push(fields.suggested_capability_key); }
+  if (fields.needs_new_capability !== undefined)      { sets.push('needs_new_capability = ?');      vals.push(fields.needs_new_capability ? 1 : 0); }
+  if (fields.executed_epic_key !== undefined)         { sets.push('executed_epic_key = ?');         vals.push(fields.executed_epic_key); }
+  if (fields.executed_capability_key !== undefined)   { sets.push('executed_capability_key = ?');   vals.push(fields.executed_capability_key); }
+  if (sets.length === 0) return { ok: true, proposal_id: id, unchanged: true };
+  vals.push(id, section);
+  db.prepare(`UPDATE epic_proposals SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);
+  return { ok: true, proposal_id: id };
+}
+
 module.exports = {
   getLandscape,
   listEntities,
@@ -1692,4 +1824,10 @@ module.exports = {
   getWorker,
   updateWorker,
   closeWorker,
+  syncEpicsCatalog,
+  listEpicsCatalog,
+  addEpicProposal,
+  listEpicProposals,
+  getEpicProposal,
+  updateEpicProposal,
 };

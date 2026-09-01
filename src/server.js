@@ -465,6 +465,9 @@ function renderBoard() {
   // (always true) moved to the top of the Board tab.
   let workers = [];
   try { workers = dbMod.listWorkers(BOARD_SECTION, true); } catch (e) {}
+  let epicsCatalog = [], epicProposals = [];
+  try { epicsCatalog = dbMod.listEpicsCatalog(BOARD_SECTION); } catch (e) {}
+  try { epicProposals = dbMod.listEpicProposals(BOARD_SECTION, true); } catch (e) {}
   const skills = loadSkills();
   const live = pieces.filter((p) => p.status !== 'done');
   const closed = pieces.filter((p) => p.status === 'done');
@@ -556,6 +559,31 @@ function renderBoard() {
     return `<tr${w.status === 'done' ? ' class="closed"' : ''}><td>${esc(w.name)}</td><td>${workerBadge(w.status)}</td><td class="tk">${tickets}</td><td>${esc(w.title)}</td><td class="id">${w.obs_id ?? ''}</td><td class="age">${boardDaysSince(w.updated_at)}</td></tr>`;
   }).join('');
   const skillRows = skills.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.description)}</td></tr>`).join('');
+
+  // Epics tab (v25): Assigned = real Epic/Capability tickets synced on demand
+  // (epic_catalog_sync); Proposed = /epics scan output, adjudicated in place
+  // (rejected/executed stay visible, dimmed - same "closed items stay in
+  // place" pattern as the Board tab, not hidden).
+  function epicBadge(status) {
+    const map = { proposed: 'todo', approved: 'on_hold', rejected: 'done', executed: 'in_progress' };
+    return `<span class="b b-${esc(map[status] || 'todo')}">${esc(status)}</span>`;
+  }
+  const catalogRows = epicsCatalog.map((e) => {
+    const link = `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(e.jira_key)}" target="_blank" rel="noopener">${esc(e.jira_key)}</a>`;
+    const rel = e.kind === 'capability'
+      ? `${e.child_count ?? 0} epic${e.child_count === 1 ? '' : 's'}`
+      : (e.parent_key ? `under ${esc(e.parent_key)}` : `<span style="color:#fde68a">no capability</span>`);
+    return `<tr><td class="tk">${link}</td><td>${e.kind === 'capability' ? 'Capability' : 'Epic'}</td><td>${esc(e.title)}</td><td>${esc(e.status || '')}</td><td>${rel}</td></tr>`;
+  }).join('');
+  const proposalRows = epicProposals.map((p) => {
+    const keys = parseRelated(p.ticket_keys);
+    const tickets = keys.map((k) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(k)}" target="_blank" rel="noopener">${esc(k)}</a>`).join(' ');
+    const cap = (p.executed_capability_key || p.suggested_capability_key)
+      ? esc(p.executed_capability_key || p.suggested_capability_key)
+      : (p.needs_new_capability ? '<span style="color:#fde68a">needs new</span>' : '');
+    return `<tr${p.status !== 'proposed' ? ' class="closed"' : ''}><td>${epicBadge(p.status)}</td><td>${esc(p.suggested_epic_name || '')}</td><td class="tk">${tickets}</td><td>${cap}</td><td>${esc(p.rationale)}</td><td class="age">${boardDaysSince(p.created_at)}</td></tr>`;
+  }).join('');
+  const openProposalCount = epicProposals.filter((p) => p.status === 'proposed').length;
 
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -663,6 +691,7 @@ ${orderBand(live, computeSlotMap())}
   <button id="tres" onclick="show('research')">Research (${research.length})</button>
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
   <button id="tw" onclick="show('workers')">Workers (${liveWorkers.length})</button>
+  <button id="te" onclick="show('epics')">Epics (${openProposalCount})</button>
 </div>
 </div>
 <div id="board" class="panel on">
@@ -699,6 +728,12 @@ ${orderBand(live, computeSlotMap())}
   </tbody></table>
   <div style="font-size:12px;color:#8b94a3;margin-top:10px">Examples: <code>d re 2</code> (dismiss research item 2) &middot; <code>p b 1</code> (pin board item 1) &middot; <code>dis</code> (discuss only, no action)</div>
 </div>
+<div id="epics" class="panel">
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Assigned</h3>
+  ${catalogRows ? `<table><thead><tr><th>Key</th><th>Type</th><th>Title</th><th>Status</th><th>Capability&nbsp;/&nbsp;Epics</th></tr></thead><tbody>${catalogRows}</tbody></table>` : `<div class="empty">No epics/capabilities synced yet - run epic_catalog_sync.</div>`}
+  <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Proposed</h3>
+  ${proposalRows ? `<table><thead><tr><th>Status</th><th>Suggested&nbsp;Epic</th><th>Tickets</th><th>Capability</th><th>Rationale</th><th>Age</th></tr></thead><tbody>${proposalRows}</tbody></table>` : `<div class="empty">No proposals yet - run /epics.</div>`}
+</div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
 // Status sort, ACTIVE sprint block only (Dan, Aug 19): a VIEW reorder - Slot
@@ -734,11 +769,11 @@ var curTab='board';try{curTab=localStorage.getItem('atlasTab')||'board';}catch(e
 var scrollMap={};try{scrollMap=JSON.parse(sessionStorage.getItem('atlasScroll')||'{}');}catch(e){}
 function show(w,init){
   if(!init){scrollMap[curTab]=window.scrollY;try{sessionStorage.setItem('atlasScroll',JSON.stringify(scrollMap));}catch(e){}}
-  for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
+  for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw'],['epics','te']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
   try{localStorage.setItem('atlasTab',w);}catch(e){}
   if(!init){curTab=w;window.scrollTo(0,scrollMap[w]||0);}
 }
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers')show(t,true);}catch(e){}})();
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers'||t==='epics')show(t,true);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
 // Board tab while a different tab is active - a plain #anchor can't scroll to
 // something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).
