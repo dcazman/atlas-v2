@@ -1190,13 +1190,15 @@ function registerTools(server, auth) {
     inputSchema: {
       section: SECTION,
       ticket_keys: z.array(z.string()).min(3).describe('The story keys in this cluster (3 or more).'),
-      suggested_epic_name: z.string().optional(),
+      action: z.enum(['new_epic', 'move_onto_existing', 'already_fine']).describe('new_epic: nothing in the cluster has a usable epic. move_onto_existing: one member\'s epic already fits - the rest should join it (set existing_epic_key). already_fine: existing assignment already captures it - no action, logged for visibility.'),
+      existing_epic_key: z.string().optional().describe('Required when action is move_onto_existing - the epic key the rest of the cluster should join.'),
+      suggested_epic_name: z.string().optional().describe('Only when action is new_epic.'),
       suggested_capability_key: z.string().optional().describe('An existing Capability key this epic should roll up to, if one fits.'),
       needs_new_capability: z.boolean().optional().describe('True if no existing Capability fits and a new one is needed.'),
       rationale: z.string().describe('One line, grounded in the actual ticket text - no invented themes.'),
     },
-  }, async ({ section, ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale }) => {
-    return json(db.addEpicProposal(section, { ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale }));
+  }, async ({ section, ticket_keys, action, existing_epic_key, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale }) => {
+    return json(db.addEpicProposal(section, { ticket_keys, action, existing_epic_key, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale }));
   });
 
   guarded('epic_proposal_list', {
@@ -1227,8 +1229,10 @@ function registerTools(server, auth) {
       needs_new_capability: z.boolean().optional(),
       executed_epic_key: z.string().optional().describe('The new epic\'s key, once created.'),
       executed_capability_key: z.string().optional().describe('The new Capability\'s key, once created (if one was needed).'),
+      action: z.enum(['new_epic', 'move_onto_existing', 'already_fine']).optional(),
+      existing_epic_key: z.string().optional(),
     },
-  }, async ({ section, proposal_id, status, decision_note, suggested_capability_key, needs_new_capability, executed_epic_key, executed_capability_key }) => {
+  }, async ({ section, proposal_id, status, decision_note, suggested_capability_key, needs_new_capability, executed_epic_key, executed_capability_key, action, existing_epic_key }) => {
     const fields = {};
     if (status !== undefined) fields.status = status;
     if (decision_note !== undefined) fields.decision_note = decision_note;
@@ -1236,6 +1240,8 @@ function registerTools(server, auth) {
     if (needs_new_capability !== undefined) fields.needs_new_capability = needs_new_capability;
     if (executed_epic_key !== undefined) fields.executed_epic_key = executed_epic_key;
     if (executed_capability_key !== undefined) fields.executed_capability_key = executed_capability_key;
+    if (action !== undefined) fields.action = action;
+    if (existing_epic_key !== undefined) fields.existing_epic_key = existing_epic_key;
     const r = db.updateEpicProposal(section, proposal_id, fields);
     if (!r.ok) return text(`No epic proposal ${proposal_id} in ${section}.`);
     return json(r);

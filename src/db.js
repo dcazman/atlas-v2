@@ -725,6 +725,23 @@ if (db.prepare('PRAGMA user_version').get().user_version < 25) {
   db.exec('PRAGMA user_version = 25');
 }
 
+// v26: epic_proposals.action (Dan design conversation, Sep 1 2026). Missed in
+// v25 - a proposal needs to say WHAT it's proposing, not just carry a
+// suggested epic name. new_epic (nothing in the cluster has a usable epic) /
+// move_onto_existing (one member's epic already fits, the rest should join
+// it) / already_fine (existing assignment already captures it - no action,
+// logged for visibility only, same "record the full scan" spirit as the rest
+// of this table).
+if (db.prepare('PRAGMA user_version').get().user_version < 26) {
+  try {
+    db.exec("ALTER TABLE epic_proposals ADD COLUMN action TEXT NOT NULL DEFAULT 'new_epic' CHECK (action IN ('new_epic','move_onto_existing','already_fine'))");
+  } catch (e) { /* already present */ }
+  try {
+    db.exec('ALTER TABLE epic_proposals ADD COLUMN existing_epic_key TEXT');
+  } catch (e) { /* already present, holds the epic key for move_onto_existing */ }
+  db.exec('PRAGMA user_version = 26');
+}
+
 function nameTokens(s) {
   return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
 }
@@ -1716,14 +1733,14 @@ function listEpicsCatalog(section) {
 // same cluster hits the UNIQUE constraint and returns the existing row
 // instead of creating a duplicate, so old no's never resurface.
 // -------------------------------------------------------------------------
-function addEpicProposal(section, { ticket_keys, suggested_epic_name, suggested_capability_key = null, needs_new_capability = false, rationale }) {
+function addEpicProposal(section, { ticket_keys, suggested_epic_name, suggested_capability_key = null, needs_new_capability = false, rationale, action = 'new_epic', existing_epic_key = null }) {
   const fingerprint = [...ticket_keys].sort().join(',');
   const existing = db.prepare('SELECT id FROM epic_proposals WHERE section = ? AND fingerprint = ?').get(section, fingerprint);
   if (existing) return { proposal_id: existing.id, already_existed: true };
   const info = db.prepare(`
-    INSERT INTO epic_proposals (section, fingerprint, ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(section, fingerprint, JSON.stringify(ticket_keys), suggested_epic_name ?? null, suggested_capability_key, needs_new_capability ? 1 : 0, rationale);
+    INSERT INTO epic_proposals (section, fingerprint, ticket_keys, suggested_epic_name, suggested_capability_key, needs_new_capability, rationale, action, existing_epic_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(section, fingerprint, JSON.stringify(ticket_keys), suggested_epic_name ?? null, suggested_capability_key, needs_new_capability ? 1 : 0, rationale, action, existing_epic_key);
   return { proposal_id: info.lastInsertRowid, already_existed: false };
 }
 
@@ -1748,6 +1765,8 @@ function updateEpicProposal(section, id, fields = {}) {
   if (fields.needs_new_capability !== undefined)      { sets.push('needs_new_capability = ?');      vals.push(fields.needs_new_capability ? 1 : 0); }
   if (fields.executed_epic_key !== undefined)         { sets.push('executed_epic_key = ?');         vals.push(fields.executed_epic_key); }
   if (fields.executed_capability_key !== undefined)   { sets.push('executed_capability_key = ?');   vals.push(fields.executed_capability_key); }
+  if (fields.action !== undefined)                    { sets.push('action = ?');                    vals.push(fields.action); }
+  if (fields.existing_epic_key !== undefined)         { sets.push('existing_epic_key = ?');         vals.push(fields.existing_epic_key); }
   if (sets.length === 0) return { ok: true, proposal_id: id, unchanged: true };
   vals.push(id, section);
   db.prepare(`UPDATE epic_proposals SET ${sets.join(', ')} WHERE id = ? AND section = ?`).run(...vals);

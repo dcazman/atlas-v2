@@ -575,13 +575,18 @@ function renderBoard() {
       : (e.parent_key ? `under ${esc(e.parent_key)}` : `<span style="color:#fde68a">no capability</span>`);
     return `<tr><td class="tk">${link}</td><td>${e.kind === 'capability' ? 'Capability' : 'Epic'}</td><td>${esc(e.title)}</td><td>${esc(e.status || '')}</td><td>${rel}</td></tr>`;
   }).join('');
+  const actionLabel = (p) => {
+    if (p.action === 'move_onto_existing') return `move onto ${esc(p.existing_epic_key || '?')}`;
+    if (p.action === 'already_fine') return 'already fine';
+    return esc(p.suggested_epic_name || 'new epic');
+  };
   const proposalRows = epicProposals.map((p) => {
     const keys = parseRelated(p.ticket_keys);
     const tickets = keys.map((k) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(k)}" target="_blank" rel="noopener">${esc(k)}</a>`).join(' ');
     const cap = (p.executed_capability_key || p.suggested_capability_key)
       ? esc(p.executed_capability_key || p.suggested_capability_key)
       : (p.needs_new_capability ? '<span style="color:#fde68a">needs new</span>' : '');
-    return `<tr${p.status !== 'proposed' ? ' class="closed"' : ''}><td>${epicBadge(p.status)}</td><td>${esc(p.suggested_epic_name || '')}</td><td class="tk">${tickets}</td><td>${cap}</td><td>${esc(p.rationale)}</td><td class="age">${boardDaysSince(p.created_at)}</td></tr>`;
+    return `<tr${p.status !== 'proposed' ? ' class="closed"' : ''}><td>${epicBadge(p.status)}</td><td>${actionLabel(p)}</td><td class="tk">${tickets}</td><td>${cap}</td><td>${esc(p.rationale)}</td><td class="age">${boardDaysSince(p.created_at)}</td></tr>`;
   }).join('');
   const openProposalCount = epicProposals.filter((p) => p.status === 'proposed').length;
 
@@ -732,7 +737,7 @@ ${orderBand(live, computeSlotMap())}
   <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Assigned</h3>
   ${catalogRows ? `<table><thead><tr><th>Key</th><th>Type</th><th>Title</th><th>Status</th><th>Capability&nbsp;/&nbsp;Epics</th></tr></thead><tbody>${catalogRows}</tbody></table>` : `<div class="empty">No epics/capabilities synced yet - run epic_catalog_sync.</div>`}
   <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Proposed</h3>
-  ${proposalRows ? `<table><thead><tr><th>Status</th><th>Suggested&nbsp;Epic</th><th>Tickets</th><th>Capability</th><th>Rationale</th><th>Age</th></tr></thead><tbody>${proposalRows}</tbody></table>` : `<div class="empty">No proposals yet - run /epics.</div>`}
+  ${proposalRows ? `<table><thead><tr><th>Status</th><th>Action</th><th>Tickets</th><th>Capability</th><th>Rationale</th><th>Age</th></tr></thead><tbody>${proposalRows}</tbody></table>` : `<div class="empty">No proposals yet - run /epics.</div>`}
 </div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
