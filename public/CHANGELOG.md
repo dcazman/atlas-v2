@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-09-02
+
+**Security**
+- `npm audit fix` for transitive `fast-uri` (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc,
+  GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — host confusion / SSRF via IDN and IPv6
+  normalization) and `qs` (GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g — array-limit bypass /
+  DoS). `npm audit` now reports 0 vulnerabilities. No source changes; all 30 tests still pass
+  (verified on Node 22; this host's Node 20 can't run the suite at all - node:sqlite needs 22.5+).
+
 ## v4 — 2026-08-21
 
 `get_landscape` stopped dumping every entity in a section, and got a bounded

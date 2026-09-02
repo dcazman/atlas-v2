@@ -155,3 +155,28 @@ atlas-v2 docker-compose.yml has NO build section - the container runs the prebui
 Correct deploy after editing src/:
   cd /warehouse/atlas-v2 && docker build -t dcazman/atlas:v2 . && docker compose up -d --force-recreate
 Then verify with: wget -qO- http://localhost:7795/ and grep for the change.
+
+## Dependabot alerts fixed (2026-09-02, Cowork session)
+Root atlas-v2: `npm audit` was 4 vulns (1 moderate, 3 high). `npm audit fix` cleared fast-uri
+(GHSA-5jgf-p345-68v8/f65p-4m7j-42xc/fph4-wmhf-6fwf/jqff-g426-hqxp) and qs
+(GHSA-x5fp-wj9c-mxmx/4mjr-xmp4-gh2g) via lockfile bump only. Remaining sharp <0.35.0
+(GHSA-f88m-g3jw-g9cj, inherited libvips CVEs) had no non-breaking fix - @huggingface/transformers
+(even at latest 4.2.0) still pins sharp ^0.34.5, so npm alone can't cross the 0.35 line. Added
+`"overrides": {"sharp": "^0.35.0"}` to package.json to force it; now installs sharp 0.35.4
+(libvips 8.18.6, fixed CVE-2026-33327/33328/35590/35591). Verified safe: embeddings.js only ever
+calls transformers.js in text feature-extraction mode (Xenova/all-MiniLM-L6-v2) - sharp is
+transformers' internal image-preprocessing dep for vision models, never exercised here.
+Smoke-tested on Node 22 (cloud sandbox, since this host's Node 20 can't load onnxruntime-node's
+glibc binary at all - unrelated pre-existing host limitation, same class as the Alpine/glibc
+gotcha in obs 1307): `@huggingface/transformers` import + `pipeline` resolve fine, sharp loads
+and reports libvips 8.18.6. `npm audit` -> 0 vulnerabilities.
+public/ (Claude-Atlas-MCP mirror): same fast-uri/qs class, no sharp exposure (no
+@huggingface/transformers dep) - `npm audit fix` alone took it to 0 vulnerabilities. Full
+`npm test` (30/30) verified green on Node 22 in the cloud sandbox; this host's Node 20 can't run
+it (node:sqlite needs >=22.5, matches public/package.json engines - a pre-existing host/engine
+gap, not caused by this fix).
+Files touched: package.json, package-lock.json, public/package-lock.json, public/CHANGELOG.md,
+this file. Committed + pushed to origin/main directly (Dan's usual workflow for this repo, no PR
+process). NOT yet redeployed - dcazman/atlas:v2 image still needs rebuild + force-recreate per
+the deploy recipe above to actually run the patched deps in production. No src/ or
+runtime-behavior changes, so safe to deploy whenever convenient.
