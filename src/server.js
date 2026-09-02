@@ -467,7 +467,7 @@ function renderBoard() {
   try { workers = dbMod.listWorkers(BOARD_SECTION, true); } catch (e) {}
   let epicsCatalog = [], epicProposals = [];
   try { epicsCatalog = dbMod.listEpicsCatalog(BOARD_SECTION); } catch (e) {}
-  try { epicProposals = dbMod.listEpicProposals(BOARD_SECTION, true); } catch (e) {}
+  try { epicProposals = dbMod.listEpicProposals(BOARD_SECTION, false); } catch (e) {}
   const skills = loadSkills();
   const live = pieces.filter((p) => p.status !== 'done');
   const closed = pieces.filter((p) => p.status === 'done');
