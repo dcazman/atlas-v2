@@ -182,7 +182,11 @@ repo, no PR process). VERIFIED post-push via GET /repos/dcazman/atlas-v2/dependa
 GitHub API. Note: the push itself printed "GitHub found 13 vulnerabilities (9 high, 4 moderate)"
 - that's the pre-push cached count from the old commit's dependency graph, not the post-push
 state; don't trust that push-time line, always re-check the API/UI after Dependabot-related
-pushes since it lags the actual recompute by a few seconds. NOT yet redeployed - dcazman/atlas:v2
-image still needs rebuild + force-recreate per the deploy recipe above to actually run the
-patched deps in production. No src/ or runtime-behavior changes, so safe to deploy whenever
-convenient.
+pushes since it lags the actual recompute by a few seconds.
+DEPLOYED same session on Dan's go: tagged the running image dcazman/atlas:pre-depfix-rollback-20260902
+(rollback point, image id 4a559ce645c5) before touching anything, then
+`docker build -t dcazman/atlas:v2 .` (new image 38f2d398195b) and `docker compose up -d --force-recreate`.
+Verified inside the new container: sharp 0.35.4, fast-uri 3.1.7, qs 6.16.0. Came up clean - no
+errors in logs, board UI on :7795 responds, Atlas MCP tools kept working through the recreate
+(no client-visible interruption). Rollback if ever needed:
+`docker tag dcazman/atlas:pre-depfix-rollback-20260902 dcazman/atlas:v2 && cd /warehouse/atlas-v2 && docker compose up -d --force-recreate`.
