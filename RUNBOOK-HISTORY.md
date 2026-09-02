@@ -176,7 +176,13 @@ public/ (Claude-Atlas-MCP mirror): same fast-uri/qs class, no sharp exposure (no
 it (node:sqlite needs >=22.5, matches public/package.json engines - a pre-existing host/engine
 gap, not caused by this fix).
 Files touched: package.json, package-lock.json, public/package-lock.json, public/CHANGELOG.md,
-this file. Committed + pushed to origin/main directly (Dan's usual workflow for this repo, no PR
-process). NOT yet redeployed - dcazman/atlas:v2 image still needs rebuild + force-recreate per
-the deploy recipe above to actually run the patched deps in production. No src/ or
-runtime-behavior changes, so safe to deploy whenever convenient.
+this file. Committed (7068c8d) + pushed to origin/main directly (Dan's usual workflow for this
+repo, no PR process). VERIFIED post-push via GET /repos/dcazman/atlas-v2/dependabot/alerts
+(state=open and state=all, both empty) - 0 alerts, any state, confirmed straight from the
+GitHub API. Note: the push itself printed "GitHub found 13 vulnerabilities (9 high, 4 moderate)"
+- that's the pre-push cached count from the old commit's dependency graph, not the post-push
+state; don't trust that push-time line, always re-check the API/UI after Dependabot-related
+pushes since it lags the actual recompute by a few seconds. NOT yet redeployed - dcazman/atlas:v2
+image still needs rebuild + force-recreate per the deploy recipe above to actually run the
+patched deps in production. No src/ or runtime-behavior changes, so safe to deploy whenever
+convenient.
