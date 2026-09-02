@@ -190,3 +190,27 @@ Verified inside the new container: sharp 0.35.4, fast-uri 3.1.7, qs 6.16.0. Came
 errors in logs, board UI on :7795 responds, Atlas MCP tools kept working through the recreate
 (no client-visible interruption). Rollback if ever needed:
 `docker tag dcazman/atlas:pre-depfix-rollback-20260902 dcazman/atlas:v2 && cd /warehouse/atlas-v2 && docker compose up -d --force-recreate`.
+
+## Public mirror (Claude-Atlas-MCP) synced (2026-09-02)
+Dan flagged that public should track close to private ("stripped down private atlas... enough
+to grow with none of my information") and that he believed he'd updated it ~4 weeks ago. Checked:
+/warehouse/claude-atlas-mcp-sync (the working clone of github.com/dcazman/Claude-Atlas-MCP) was at
+commit 1656213, dated 2026-08-14 - that WAS a real sync (matches his memory), but atlas-v2/public/
+(the private repo's public-safe staging copy) had moved on since: commit 646b3e4 "Public: port
+core-memory tier" landed 2026-08-21 in the staging copy but was never actually pushed out to the
+real public repo. Today's Dependabot fix (7068c8d) stacked on top of that, also unsynced.
+Diffed staging vs the real public clone (rsync -rcnv, excluding .git/node_modules/package-lock.json):
+9 files differed - CHANGELOG.md, README.md, package.json, board/ (new - a design-note README, no
+code), src/db.js, src/tools.js, and the 3 test files. Scrubbed board/README.md before copying -
+it referenced "Dan" and "danfeed" by name several times (the only file that did; nothing else in
+the diff mentioned either) - genericized to "the maintainer" / "a custom ticket-poller service".
+Copied the 9 files (rsync, real run this time), regenerated package-lock.json fresh (npm install,
+audited 0 vulnerabilities) and committed it too - it wasn't tracked in the public repo before,
+which meant Dependabot had no lockfile to alert against there. Pushed as 94bca6d. Verified via
+GitHub API: 0 open Dependabot alerts on Claude-Atlas-MCP, both before and after.
+Tests: same host-Node-20 limitation as everywhere else in this session (node:sqlite needs
+>=22.5) - couldn't run npm test on this host, but the copied file content is byte-identical to
+what already passed 30/30 on Node 22 earlier this session, so it's covered.
+Process note for next time: the "Public: ..." commits in atlas-v2/public/ are a STAGING step,
+not the sync itself - always check whether they actually made it to the real
+dcazman/Claude-Atlas-MCP repo (git log -1 there) before assuming a staged port already shipped.
