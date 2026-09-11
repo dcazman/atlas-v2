@@ -1312,6 +1312,22 @@ function addBoardRow(section, title, opts = {}) {
   if (!/^PCT-/.test(primary) && !/^GSSD-/.test(primary)) {
     throw new Error('board membership: the primary ticket must be PCT- or GSSD- (Dan is tracked in PCT/GSSD). ' + primary + ' is a driver (INFRA/CHANGE/PIRISK/SECARCH/etc.) and belongs in a needs-a-story state, not a board piece.');
   }
+  // DEDUPE GUARD (Sep 11 2026, PCT-16698/16699): a manual board_add and danfeed's
+  // own auto-add path can both fire for the same freshly-created ticket at nearly
+  // the same moment. Check LIVE rows only (on_board=1, not done) - an offboarded/
+  // closed row doesn't count, so a deliberately-offboarded ticket can always come
+  // back as a genuinely new row. No-op onto the existing row instead of inserting
+  // a second one for any key already carried by a live piece.
+  const liveRows = db.prepare(
+    `SELECT id, related FROM board_rows WHERE section = ? AND on_board = 1 AND status != 'done'`
+  ).all(section);
+  for (const row of liveRows) {
+    let existingRel = [];
+    try { existingRel = JSON.parse(row.related); } catch (e) { existingRel = []; }
+    if (arr.some((k) => existingRel.includes(k))) {
+      return { row_id: row.id, deduped: true };
+    }
+  }
   const info = db.prepare(
     `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname)
      VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?, ?)`

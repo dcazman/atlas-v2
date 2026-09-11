@@ -541,7 +541,12 @@ function registerTools(server, auth) {
     description:
       'Add a typed row to the v3 structured work board. Returns the immutable row number. ' +
       'Status defaults to "active". Use related for linked Jira keys. Nothing auto-promotes onto ' +
-      'the board - a row exists because a human decision put it here.',
+      'the board - a row exists because a human decision put it here. Deduped against LIVE rows ' +
+      '(on_board, not done) at the ticket-key level: if any key in related already belongs to a ' +
+      'live row, this no-ops and returns that row\'s id with deduped:true instead of inserting a ' +
+      'second row for the same ticket (Sep 11 2026, PCT-16698/16699). An offboarded or closed row ' +
+      'does not count, so re-adding a deliberately-offboarded ticket for a genuinely new reason ' +
+      'still creates a fresh row.',
     inputSchema: {
       section: SECTION,
       title: z.string().describe('Short row headline.'),
