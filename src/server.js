@@ -458,6 +458,10 @@ function renderBoard() {
   try { pending = dbMod.listPending(BOARD_SECTION); } catch (e) {}
   try { reminders = dbMod.listReminders(BOARD_SECTION, false); } catch (e) {}
   try { research = dbMod.listResearch(BOARD_SECTION); } catch (e) {}
+  // Risk tab (v27): PIRISK lifecycle rows, on_board=0 - never part of `pieces`
+  // above (listBoardRows only returns on_board=1), fetched separately.
+  let riskRows = { not_addressed: [], addressed: [] };
+  try { riskRows = dbMod.listRiskRows(BOARD_SECTION); } catch (e) {}
   // Plan tab DECOMMISSIONED (Dan, Aug 20): the authored plan (entries, read,
   // confidences) rotted between conductor sessions - a stale plan costs trust.
   // plan_entries/plan_notes tables + board_plan_* tools stay dormant for a
@@ -559,6 +563,24 @@ function renderBoard() {
     return `<tr${w.status === 'done' ? ' class="closed"' : ''}><td>${esc(w.name)}</td><td>${workerBadge(w.status)}</td><td class="tk">${tickets}</td><td>${esc(w.title)}</td><td class="id">${w.obs_id ?? ''}</td><td class="age">${boardDaysSince(w.updated_at)}</td></tr>`;
   }).join('');
   const skillRows = skills.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.description)}</td></tr>`).join('');
+
+  // Risk tab (v27): PIRISK tickets never get formally assigned to Dan and
+  // never close the way normal work does (Erica Heffer, Security - they're
+  // records, addressed via comments, some stay open indefinitely in a
+  // reduced-risk state). Not Addressed = danfeed's proactive PIRISK-discovery
+  // scan found an open PIRISK linked to Dan's stories, nobody has acted yet
+  // (pure safety net). Addressed / Monitoring = Claude did remediation +
+  // commented (board_risk_state) - off Dan's active plate, but still watched
+  // for a follow-up comment from anyone but Dan (danfeed's NEW-COMMENT
+  // watcher extension). Closed in Jira falls off this list entirely, same as
+  // a normal board close - nothing special rendered for that here.
+  const riskRow = (r) => {
+    const rel = parseRelated(r.related);
+    const tickets = rel.map((k) => `<a href="https://sonosinc.atlassian.net/browse/${encodeURIComponent(k)}" target="_blank" rel="noopener">${esc(k)}</a>`).join('<br>');
+    return `<tr><td>${esc(r.nickname || r.title)}</td><td class="tk">${tickets}</td><td class="note-flag">${esc(r.waiting_on || '')}</td><td class="age">${boardDaysSince(r.source_date || r.created_at)}</td></tr>`;
+  };
+  const riskNotAddressedRows = riskRows.not_addressed.map(riskRow).join('');
+  const riskAddressedRows = riskRows.addressed.map(riskRow).join('');
 
   // Epics tab (v25): Assigned = real Epic/Capability tickets synced on demand
   // (epic_catalog_sync); Proposed = /epics scan output, adjudicated in place
@@ -697,6 +719,7 @@ ${orderBand(live, computeSlotMap())}
   <button id="tr" onclick="show('reminders')">Reminders (${reminders.length})</button>
   <button id="tw" onclick="show('workers')">Workers (${liveWorkers.length})</button>
   <button id="te" onclick="show('epics')">Epics (${openProposalCount})</button>
+  <button id="tk" onclick="show('risk')">Risk (${riskRows.not_addressed.length})</button>
 </div>
 </div>
 <div id="board" class="panel on">
@@ -739,6 +762,12 @@ ${orderBand(live, computeSlotMap())}
   <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500">Proposed</h3>
   ${proposalRows ? `<table><thead><tr><th title="Say this number to act on it, e.g. &quot;create epic for item 3&quot;.">Item&nbsp;ⓘ</th><th>Status</th><th>Action</th><th>Tickets</th><th>Capability</th><th>Rationale</th></tr></thead><tbody>${proposalRows}</tbody></table>` : `<div class="empty">No proposals yet - run /epics.</div>`}
 </div>
+<div id="risk" class="panel">
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="danfeed's proactive PIRISK-discovery scan found these linked to Dan's stories - nobody has acted on them yet. Pure safety net against a risk record that never formally lands on Dan's plate.">Not Addressed&nbsp;ⓘ</h3>
+  ${riskNotAddressedRows ? `<table><thead><tr><th>Title</th><th>Ticket(s)</th><th>Note</th><th>Age</th></tr></thead><tbody>${riskNotAddressedRows}</tbody></table>` : `<div class="empty">Nothing outstanding.</div>`}
+  <h3 style="margin:26px 0 6px;font-size:12px;color:#8b94a3;text-transform:uppercase;letter-spacing:.04em;font-weight:500" title="Claude remediated and commented (board_risk_state) - off Dan's active plate. Still watched: a follow-up comment from anyone but Dan raises a flag in the tray.">Addressed&nbsp;/&nbsp;Monitoring&nbsp;ⓘ</h3>
+  ${riskAddressedRows ? `<table><thead><tr><th>Title</th><th>Ticket(s)</th><th>Note</th><th>Age</th></tr></thead><tbody>${riskAddressedRows}</tbody></table>` : `<div class="empty">Nothing being monitored.</div>`}
+</div>
 <footer>Read-only. Grouped by sprint, active sprint on top, oldest-first within each. Slot numbers are frozen per sprint (obs 980) - closed items stay crossed out in place, moved items leave a marker, pin moves a story to in_progress (+ a Jira comment) and surfaces it in the In Progress strip up top. The Slot number IS the number Dan uses in chat to move/close a piece (corrected Aug 10) - a bare number means the active sprint's slot; name the block for others ("sprint 17 slot 3", "backlog 2"); it resets only on a new sprint. Claude resolves it against this view and confirms by title (the board_rows id itself is never shown anywhere). When pointing at a row, use its ticket key - it's the one identifier that's the same everywhere. Note is Claude's own working context, not Jira - Last Comment is meant to be the live Jira-side check but nothing writes it yet (danfeed follow-up). Auto-refreshes every 30s.</footer>
 <script>
 // Status sort, ACTIVE sprint block only (Dan, Aug 19): a VIEW reorder - Slot
@@ -774,11 +803,11 @@ var curTab='board';try{curTab=localStorage.getItem('atlasTab')||'board';}catch(e
 var scrollMap={};try{scrollMap=JSON.parse(sessionStorage.getItem('atlasScroll')||'{}');}catch(e){}
 function show(w,init){
   if(!init){scrollMap[curTab]=window.scrollY;try{sessionStorage.setItem('atlasScroll',JSON.stringify(scrollMap));}catch(e){}}
-  for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw'],['epics','te']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
+  for(const [id,name] of [['board','tb'],['pending','tp'],['research','tres'],['reminders','tr'],['workers','tw'],['epics','te'],['risk','tk']]){document.getElementById(id).classList.toggle('on',id===w);document.getElementById(name).classList.toggle('on',id===w);}
   try{localStorage.setItem('atlasTab',w);}catch(e){}
   if(!init){curTab=w;window.scrollTo(0,scrollMap[w]||0);}
 }
-(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers'||t==='epics')show(t,true);}catch(e){}})();
+(function(){try{var t=localStorage.getItem('atlasTab');if(t==='pending'||t==='research'||t==='reminders'||t==='workers'||t==='epics'||t==='risk')show(t,true);}catch(e){}})();
 // Jump links (e.g. the In Progress strip) can point at a row that's on the
 // Board tab while a different tab is active - a plain #anchor can't scroll to
 // something inside a display:none panel, so switch tabs first (Dan, 2026-08-11).

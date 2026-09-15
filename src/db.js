@@ -742,6 +742,28 @@ if (db.prepare('PRAGMA user_version').get().user_version < 26) {
   db.exec('PRAGMA user_version = 26');
 }
 
+// v27: RISK TAB (Dan design conversation, Sep 15 2026). board_rows.risk_state
+// tracks a PIRISK ticket's remediation lifecycle so it never has to live only
+// in Jira. NULL = "Not Addressed" (danfeed's proactive PIRISK-discovery scan
+// found it, Dan hasn't dealt with it yet - pure safety net against forgetting
+// a risk record that never formally lands on his plate). 'addressed' = Claude
+// did remediation work and commented - moved to "Addressed / Monitoring",
+// off Dan's active plate but still watched (danfeed's NEW-COMMENT watcher
+// checks these by comment AUTHOR, not assignee, since PIRISK stays assigned
+// to the risk owner - a follow-up comment from anyone but Dan raises a flag).
+// These risk-tracking rows are their OWN board_rows (related[0] = the PIRISK
+// key), created with on_board=0 so they NEVER surface via the normal Board
+// query (listBoardRows filters on_board=1) - they render only on the Risk
+// tab. risk_state is additive and orthogonal to on_board: normal PCT/GSSD
+// work rows keep risk_state NULL forever and are untouched by any of this.
+if (db.prepare('PRAGMA user_version').get().user_version < 27) {
+  // No DB-level CHECK (matches the plain nullable-ALTER convention used for
+  // nickname/last_comment/queue_pos above) - validity of the value is
+  // enforced application-side, in setBoardRiskState below.
+  try { db.exec('ALTER TABLE board_rows ADD COLUMN risk_state TEXT'); } catch (e) { /* already present */ }
+  db.exec('PRAGMA user_version = 27');
+}
+
 function nameTokens(s) {
   return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
 }
@@ -1309,7 +1331,14 @@ function addBoardRow(section, title, opts = {}) {
     throw new Error('a board piece requires at least one ticket number in related ("on the board => it has a ticket")');
   }
   const primary = String(arr[0] || '');
-  if (!/^PCT-/.test(primary) && !/^GSSD-/.test(primary)) {
+  // RISK TAB exception (v27): a row created explicitly hidden (on_board:false)
+  // and primary-keyed on a PIRISK ticket is allowed through - it can never
+  // reach the Board view (listBoardRows only ever returns on_board=1 rows),
+  // so the "primary must be PCT/GSSD" guard - which exists to protect the
+  // Board - has nothing to protect here. Every other case (on_board default/
+  // true) keeps the original rule untouched.
+  const isHiddenRiskRow = opts.on_board === false && /^PIRISK-/.test(primary);
+  if (!isHiddenRiskRow && !/^PCT-/.test(primary) && !/^GSSD-/.test(primary)) {
     throw new Error('board membership: the primary ticket must be PCT- or GSSD- (Dan is tracked in PCT/GSSD). ' + primary + ' is a driver (INFRA/CHANGE/PIRISK/SECARCH/etc.) and belongs in a needs-a-story state, not a board piece.');
   }
   // DEDUPE GUARD (Sep 11 2026, PCT-16698/16699): a manual board_add and danfeed's
@@ -1328,10 +1357,28 @@ function addBoardRow(section, title, opts = {}) {
       return { row_id: row.id, deduped: true };
     }
   }
+  // Separate dedupe for hidden risk rows (v27): they sit at on_board=0 by
+  // design, so the LIVE-row check above never sees them - without this, a
+  // repeated danfeed PIRISK-discovery poll would re-add the same ticket every
+  // time. Scoped to on_board=0 rows only, so it never touches the existing
+  // offboarded-ticket-can-come-back-fresh behavior above.
+  if (opts.on_board === false) {
+    const hiddenRows = db.prepare(
+      `SELECT id, related FROM board_rows WHERE section = ? AND on_board = 0`
+    ).all(section);
+    for (const row of hiddenRows) {
+      let existingRel = [];
+      try { existingRel = JSON.parse(row.related); } catch (e) { existingRel = []; }
+      if (arr.some((k) => existingRel.includes(k))) {
+        return { row_id: row.id, deduped: true };
+      }
+    }
+  }
+  const onBoardVal = opts.on_board === false ? 0 : (opts.on_board === true ? 1 : null);
   const info = db.prepare(
-    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname)
-     VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?, ?)`
-  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null, opts.sprint ?? null, opts.nickname ?? null);
+    `INSERT INTO board_rows (section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname, on_board)
+     VALUES (?, ?, COALESCE(?, 'todo'), ?, ?, ?, COALESCE(?, 0), ?, ?, COALESCE(?, 1))`
+  ).run(section, title, opts.status ?? null, JSON.stringify(arr), opts.waiting_on ?? null, opts.source_date ?? null, opts.in_sprint ?? null, opts.sprint ?? null, opts.nickname ?? null, onBoardVal);
   return { row_id: info.lastInsertRowid };
 }
 
@@ -1340,10 +1387,51 @@ function listBoardRows(section, includeDone) {
   // bumped pieces (priority set, lowest first) float to the top; the rest are
   // oldest-first by true ticket age (source_date), else created_at.
   const ORDER = "ORDER BY (priority IS NULL), priority ASC, in_sprint DESC, (status = 'on_hold') ASC, COALESCE(source_date, created_at) ASC, id ASC";
+  // risk_state='addressed' rows never belong on the Board (v27, Risk tab) -
+  // additive AND, on top of the existing on_board/status filtering, which is
+  // otherwise untouched. In practice these rows are already on_board=0 and
+  // excluded by that alone; this is a defensive second guard, not a rewrite.
   const sql = includeDone
-    ? `SELECT * FROM board_rows WHERE section = ? AND on_board = 1 ${ORDER}`
-    : `SELECT * FROM board_rows WHERE section = ? AND on_board = 1 AND status != 'done' ${ORDER}`;
+    ? `SELECT * FROM board_rows WHERE section = ? AND on_board = 1 AND (risk_state IS NULL OR risk_state != 'addressed') ${ORDER}`
+    : `SELECT * FROM board_rows WHERE section = ? AND on_board = 1 AND status != 'done' AND (risk_state IS NULL OR risk_state != 'addressed') ${ORDER}`;
   return db.prepare(sql).all(section);
+}
+
+// ---------------------------------------------------------------------------
+// RISK TAB (v27). Rows here are board_rows in their own right (on_board=0,
+// related[0] a PIRISK key) - created by danfeed's PIRISK-discovery scan via
+// addBoardRow({ on_board: false, ... }). Split by risk_state for the tab's
+// two sections: NULL = Not Addressed (danfeed found it, nobody has acted),
+// 'addressed' = Addressed / Monitoring (Claude remediated + commented).
+// Closed in Jira -> status flips to done via the normal board_close/offboard
+// sync path -> falls off this list entirely, same as a normal board close.
+// ---------------------------------------------------------------------------
+function listRiskRows(section) {
+  const rows = db.prepare(
+    `SELECT * FROM board_rows WHERE section = ? AND on_board = 0 AND status != 'done'
+       AND json_extract(related, '$[0]') LIKE 'PIRISK-%'
+     ORDER BY COALESCE(source_date, created_at) ASC, id ASC`
+  ).all(section);
+  return {
+    not_addressed: rows.filter((r) => r.risk_state !== 'addressed'),
+    addressed: rows.filter((r) => r.risk_state === 'addressed'),
+  };
+}
+
+// Atomic setter (board_pin pattern) for a risk row's lifecycle state. state
+// must be 'addressed' (Claude marks it after remediation + a comment) or
+// null (clear it back to Not Addressed). Any other row_id/section still
+// works - this is not restricted to on_board=0/PIRISK rows at the DB layer,
+// same non-blocking spirit as the rest of board_rows' setters.
+function setBoardRiskState(section, id, state) {
+  if (state !== 'addressed' && state !== null && state !== undefined) {
+    return { ok: false, reason: 'invalid_state' };
+  }
+  const row = getBoardRow(section, id);
+  if (!row) return { ok: false, reason: 'not_found' };
+  const val = state === 'addressed' ? 'addressed' : null;
+  db.prepare('UPDATE board_rows SET risk_state = ? WHERE id = ? AND section = ?').run(val, id, section);
+  return { ok: true, row_id: id, risk_state: val };
 }
 
 function getBoardRow(section, id) {
@@ -1831,6 +1919,8 @@ module.exports = {
   moveBoardRow,
   holdBoardRow,
   releaseBoardRow,
+  listRiskRows,
+  setBoardRiskState,
   setBoardOrder,
   listOrderQueue,
   addPendingItem,

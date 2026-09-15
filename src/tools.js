@@ -557,9 +557,10 @@ function registerTools(server, auth) {
       in_sprint: z.boolean().optional().describe('True if the ticket is in the current active sprint (drives current-sprint-first ordering). danfeed supplies this.'),
       sprint: z.string().optional().describe('Sprint number/label for display, e.g. "15" (danfeed supplies from Jira). Display only.'),
       nickname: z.string().describe('REQUIRED at birth (Dan Aug 14 - pieces are born complete, naming is never a separate task): a 2-4 word handle in Dan\'s terms ("GCP folders", "DMARC sp= fix") shown in strips/bands instead of the long title. Coin it from the ticket in the same breath as boarding it.'),
+      on_board: z.boolean().optional().describe('Defaults to true (a normal, visible board piece). Pass false to create a row that never appears on the Board view (listBoardRows only returns on_board=1) - used for Risk tab tracking rows (v27): with on_board:false, related[0] may be a PIRISK- key (normally rejected) since a hidden row can never reach the Board it would otherwise violate.'),
     },
-  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname }) => {
-    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0, sprint, nickname }));
+  }, async ({ section, title, status, related, waiting_on, source_date, in_sprint, sprint, nickname, on_board }) => {
+    return json(db.addBoardRow(section, title, { status, related, waiting_on, source_date, in_sprint: in_sprint ? 1 : 0, sprint, nickname, on_board }));
   });
 
   guarded('board_list', {
@@ -746,6 +747,39 @@ function registerTools(server, auth) {
     const u = db.updateBoardRow(section, row_id, { status: 'in_progress' });
     if (!u.ok) return text(`No board piece ${row_id} in ${section}.`);
     return json({ ok: true, pinned: row_id, status: 'in_progress' });
+  });
+
+  guarded('board_risk_state', {
+    title: 'Set a Risk-tab row\'s lifecycle state',
+    description:
+      'Set (or clear) a Risk-tab row\'s PIRISK lifecycle state (v27). Claude calls this with ' +
+      '"addressed" after doing remediation work on the linked PIRISK ticket AND commenting on it - ' +
+      'the row moves from "Not Addressed" to "Addressed / Monitoring" on the Risk tab, off Dan\'s ' +
+      'active plate. Pass null/omit to clear it back to Not Addressed. This never touches Jira and ' +
+      'never touches the main Board (Risk-tab rows are on_board=0 already) - it is a pure atomic ' +
+      'setter, same one-call shape as board_pin. danfeed\'s NEW-COMMENT watcher then polls ' +
+      '"addressed" rows by comment author (not assignee) to flag if the risk owner comes back needing more work.',
+    inputSchema: {
+      section: SECTION,
+      row_id: z.number().int(),
+      state: z.enum(['addressed']).nullable().optional().describe('"addressed" to mark it, null/omit to clear back to Not Addressed.'),
+    },
+  }, async ({ section, row_id, state }) => {
+    const r = db.setBoardRiskState(section, row_id, state ?? null);
+    if (!r.ok) return text(r.reason === 'not_found' ? `No board piece ${row_id} in ${section}.` : `Invalid state.`);
+    return json(r);
+  });
+
+  guarded('board_risk_list', {
+    title: 'List Risk-tab rows',
+    description:
+      'List Risk-tab rows (v27) for a section, split into not_addressed and addressed. These are ' +
+      'on_board=0 PIRISK-primary rows - never part of board_list\'s output. danfeed\'s NEW-COMMENT ' +
+      'watcher extension polls the addressed list to check follow-up comment authors.',
+    inputSchema: { section: SECTION },
+  }, async ({ section }) => {
+    const r = db.listRiskRows(section);
+    return json({ not_addressed: r.not_addressed.map(decorate), addressed: r.addressed.map(decorate) });
   });
 
   guarded('board_order', {
