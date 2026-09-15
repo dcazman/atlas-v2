@@ -695,7 +695,7 @@ function renderBoard() {
   td.src{color:#8b94a3;font-size:12px}
   .b{font-size:11px;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;display:inline-block}
   .b-todo{background:#26303f;color:#9fb0c3}
-  .b-in_progress{background:#14532d;color:#86efac}
+  .b-in_progress{background:#14532d;color:#ffffff}
   .b-on_hold{background:#4a3a12;color:#fde68a}
   .b-done{background:#26303f;color:#93a3b8}
   .empty{color:#8b94a3;padding:24px 0}
