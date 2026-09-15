@@ -628,7 +628,7 @@ function renderBoard() {
   .activity{padding:8px 18px;font-size:12px;color:#cfd6e2;border-bottom:1px solid #2a2f3a;background:#141822;white-space:nowrap;overflow-x:auto}
   .activity.empty-act{color:#5b6472;font-style:italic}
   .activity-label{color:#ffffff;letter-spacing:.08em;font-size:10px;margin-right:10px}
-  .act-n{color:#6b7280;font-variant-numeric:tabular-nums}
+  .act-n{color:#ffffff;font-variant-numeric:tabular-nums}
   .act-item b{color:#e0b24a;font-weight:600}
   .act-item a{text-decoration:none}
   .act-item a:hover b{text-decoration:underline}
