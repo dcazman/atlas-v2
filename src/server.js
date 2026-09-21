@@ -866,11 +866,19 @@ function computeSlotMap() {
   });
   const map = new Map();
   for (const sp of allSprints) {
+    const currentIds = new Set(bySprint.get(sp).map((p) => p.id));
     try { dbMod.ensureSprintSlots(BOARD_SECTION, sp, oldestFirst(bySprint.get(sp)).map((p) => p.id)); } catch (e) {}
     let slots = [];
     try { slots = dbMod.getSprintSlots(BOARD_SECTION, sp); } catch (e) {}
     const block = 'sprint ' + sp + (sp === activeSprint ? ' (active)' : '');
-    for (const s of slots) map.set(s.row_id, { block, slot: s.slot });
+    // Only render rows that CURRENTLY belong to this sprint - sprint_slots is
+    // append-only and keeps a row's slot in every sprint it has ever been in
+    // (needed by getSlotHistoryForRow's ghost marker), so a row that moved
+    // sprints still has a stale entry here for its old sprint. Without this
+    // filter, whichever sprint sorts last in allSprints wins the block label
+    // for that row regardless of where it actually is now (found 2026-09-21,
+    // PCT-16684/16685 rendering as "sprint 20" while their real sprint was 19).
+    for (const s of slots) { if (currentIds.has(s.row_id)) map.set(s.row_id, { block, slot: s.slot }); }
   }
   let n = 0;
   for (const p of oldestFirst(backlog)) map.set(p.id, { block: 'backlog', slot: ++n });
