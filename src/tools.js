@@ -84,7 +84,7 @@ function withFooter(result, caller, prevTs) {
 // registerTools is called per-request with the authenticated token's identity.
 // Every tool that takes a section is scope-checked here, server-side, and the
 // call (allowed or denied) is written to audit_log.
-function registerTools(server, auth) {
+function registerTools(server, auth, opts = {}) {
   function guarded(name, config, handler) {
     server.registerTool(name, config, async (args) => {
       const section = args.section;
@@ -526,9 +526,14 @@ function registerTools(server, auth) {
   const BOARD_STATUS = z.enum(['todo', 'in_progress', 'on_hold', 'done']);
   const WORKER_STATUS = z.enum(['active', 'on_hold', 'done']);
 
-  function decorate(row) {
+  // slotMap (optional) = Map(row_id -> {block, slot}) from the board view, so board_list/board_get
+  // return the SAME Slot number Dan speaks in chat (frozen per sprint, obs 980) with no HTTP hop.
+  function decorate(row, slotMap) {
+    const sm = (slotMap && slotMap.get(row.id)) || null;
     return {
       ...row,
+      slot: sm ? sm.slot : null,
+      block: sm ? sm.block : null,
       related: safeParse(row.related),
       age_days: ageDays(row.source_date || row.status_changed_at),   // true ticket age when known, else stuck-ness
       lifespan_days: ageDays(row.source_date || row.created_at),      // true ticket age when known, else time-on-board
@@ -566,7 +571,7 @@ function registerTools(server, auth) {
   guarded('board_list', {
     title: 'List board rows',
     description:
-      'List structured board rows for a section, lowest row number first. Hides done rows by ' +
+      'List structured board rows for a section, lowest row number first. Each row carries `slot` and `block` - the frozen Slot number shown on the web board view (the number Dan speaks in chat; null for done/off-board rows). Hides done rows by ' +
       'default (the live board); pass include_done for everything. age_days = time in the current ' +
       'status (stuck-ness); lifespan_days = time since the row was created.',
     inputSchema: {
@@ -574,7 +579,8 @@ function registerTools(server, auth) {
       include_done: z.boolean().optional().describe('Include done rows too (default false).'),
     },
   }, async ({ section, include_done }) => {
-    return json(db.listBoardRows(section, include_done).map(decorate));
+    const slotMap = opts.computeSlotMap ? opts.computeSlotMap() : null;
+    return json(db.listBoardRows(section, include_done).map((r) => decorate(r, slotMap)));
   });
 
   guarded('board_get', {
@@ -587,7 +593,7 @@ function registerTools(server, auth) {
   }, async ({ section, row_id }) => {
     const row = db.getBoardRow(section, row_id);
     if (!row) return text(`No board row ${row_id} in ${section}.`);
-    return json(decorate(row));
+    return json(decorate(row, opts.computeSlotMap ? opts.computeSlotMap() : null));
   });
 
   guarded('board_update', {

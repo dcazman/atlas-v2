@@ -85,7 +85,7 @@ permanent URLs, incident lessons.`;
 app.post('/atlas-mcp', authCheck, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   const server = new McpServer({ name: 'atlas', version: '2.0.0' }, { instructions: ATLAS_INSTRUCTIONS });
-  registerTools(server, req.auth);
+  registerTools(server, req.auth, { computeSlotMap });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
