@@ -785,7 +785,7 @@ function registerTools(server, auth, opts = {}) {
     inputSchema: { section: SECTION },
   }, async ({ section }) => {
     const r = db.listRiskRows(section);
-    return json({ not_addressed: r.not_addressed.map(decorate), addressed: r.addressed.map(decorate) });
+    return json({ not_addressed: r.not_addressed.map((x) => decorate(x)), addressed: r.addressed.map((x) => decorate(x)) });
   });
 
   guarded('board_order', {
