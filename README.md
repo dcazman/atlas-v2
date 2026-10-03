@@ -125,9 +125,9 @@ pre-origin 403 from something Cloudflare-side (not reproduced on
 **Security — Phase 1 COMPLETE (July 2 2026):** mcp-auth-proxy (GitHub OAuth, `dcazman`
 only) now fronts both this connector (`atlas.thecasmas.com` → proxy on 8080) and
 Anchor-MCP (`mcp-anchor.thecasmas.com` → proxy on 8081). Confirmed working end-to-end
-with real MCP client traffic. Ledger not yet protected — same recipe, not started.
+with real MCP client traffic. Ledger was retired 2026-10-02, so there is nothing left to protect there.
 Phase 2 (visibility layer: failed-login logging + known-connections GUI) and TOTP for
-Anchor/Ledger remain separate, not-yet-started ideas. See "Planned / Ideas" in
+Anchor remain separate, not-yet-started ideas. See "Planned / Ideas" in
 `ATLAS.md` for full history including the Anchor debugging postmortem.
 
 ## Project custom instructions

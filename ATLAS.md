@@ -159,7 +159,7 @@ eq "..."` OR-list.
 
 ## Planned / Ideas
 
-**MCP Auth Gateway (2FA)** — [REVIVED / RESCOPED, July 2 2026] Google Authenticator
+**MCP Auth Gateway (2FA)** — [UPDATE 2026-10-02: Ledger was retired, so scope is Anchor only; the Ledger parts below are historical.] [REVIVED / RESCOPED, July 2 2026] Google Authenticator
 (TOTP) layer in addition to Cloudflare, in front of **Anchor** (`mcp-anchor.thecasmas.com`)
 and **Ledger** (`ledger.thecasmas.com`, port 7783) specifically — no longer a fully
 general any-app gateway. Distinct from "MCP Protect App" below (which is Atlas + Anchor
